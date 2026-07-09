@@ -4,16 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-**Phase 1, Phase 2, and Phase 3 all COMPLETE. v0.2.0 released.**
+**Phase 1, Phase 2, and Phase 3 all COMPLETE. v0.3.0 released.**
 
 - **Tabular (Phase 1):** ✅ End-to-end verified via live MCP server stdio flow: `load_dataset` (inline CSV) → `train_tabular` (returns task_id) → poll `get_task_status` → `predict_tabular` (returns predictions).
 - **TimeSeries + Multimodal (Phase 2):** ✅ **VERIFIED against real AutoGluon in `sy-automl-mcp:full`.** All 10 checklist items PASS or FIXED. 5 additional bugs found and fixed during Phase 2 verification.
-- **Phase 3 (hardening):** ✅ **COMPLETE.** All 4 previously-deferred tech-debt items resolved (cancel race, LRU cache, task retention, thread-safe stdout). Unified error envelope ✅, resource limits ✅, stdout pollution fix ✅, thread-safe output redirection ✅. Remaining optional work (not blockers): progress parsing, CI lint pipeline, 80% test coverage.
-- **Test counts (v0.2.0):**
-  - `:latest` suite — **52 passed, 2 skipped** (skips = TimeSeries/Multimodal not installed on tabular tier, expected).
-  - `:full` suite — **56 passed, 0 skipped, 0 failed** (~2.5 min).
-  - Live stdio MCP e2e in `:full` — **PASSED**: 24 tools listed; full tabular round-trip `load_dataset → train_tabular → poll→success → predict_tabular → ['setosa','versicolor']`; stdout clean (no AutoGluon leakage through the thread-local proxy).
-- **Git:** Initial commit (`6134717`) plus v0.2.0 release commit. Remote `origin` = `https://github.com/noahwang550/sy-automl-mcp.git` (HTTPS + GCM). Tags `v0.1.0` and `v0.2.0` pushed.
+- **Phase 3 (hardening):** ✅ **COMPLETE.** All 4 previously-deferred tech-debt items resolved (cancel race, LRU cache, task retention, thread-safe stdout). Unified error envelope ✅, resource limits ✅, stdout pollution fix ✅, thread-safe output redirection ✅.
+- **v0.3.0 engineering round:** ✅ **COMPLETE.** All 3 optional items resolved: CI lint pipeline (`.github/workflows/lint.yml`), progress parsing (`tasks/progress.py`), 80% test coverage target met (90% in `:full`).
+- **Test counts (v0.3.0):**
+  - `:latest` suite — **84 passed, 2 skipped** (skips = TimeSeries/Multimodal not installed on tabular tier, expected). Coverage: **73% total** but **91% of testable source** (multimodal.py + timeseries.py are 0% in :latest because autogluon.timeseries/multimodal aren't importable there — expected, NOT a regression).
+  - `:full` suite — **88 passed, 0 skipped, 0 failed** (~3.3 min). Coverage: **90%** (1089 stmts, 109 miss). **80% target MET.**
+  - Live stdio MCP e2e in `:full` — **PASSED**: 24 tools listed; full tabular round-trip `load_dataset → train_tabular → poll→success → predict_tabular → ['setosa','versicolor']`; stdout clean; the new `progress` field is included in `get_task_status` responses without breaking the JSON-RPC flow.
+  - `ruff check .` — **clean** (lint CI will be green).
+- **Git:** Initial commit (`6134717`) plus v0.2.0 hardening commit (`1b9bf52`) plus v0.3.0 release commit. Remote `origin` = `https://github.com/noahwang550/sy-automl-mcp.git` (HTTPS + GCM). Tags `v0.1.0`, `v0.2.0`, and `v0.3.0` pushed.
 
 ## Project Purpose
 
@@ -85,12 +87,13 @@ docker run --rm --entrypoint sh sy-automl-mcp \
   - `_common.py` installs a process-wide `_ThreadLocalOutputProxy` on `sys.stdout`/`sys.stderr` at import and provides `_suppress_output()` (sets the thread-local target to `os.devnull`) plus `set_thread_output_target()` / `reset_thread_output_target()` helpers. Special methods (`__iter__`, `__next__`, …) are implemented explicitly on the proxy class because Python looks them up on the type, not via `__getattr__`. Also exports `safe_tool`, a decorator applied to every public tool so that any unhandled exception is converted to a failure envelope (the MCP layer never sees a raw exception).
   - `model_management.py` holds a thread-safe `_ModelLRUCache` (OrderedDict, move-to-end, popitem(last=False)) capped by `MCP_MODEL_CACHE_MAX`. Exposes `get_or_load()` which serializes concurrent loads of the same uncached key via a per-cache lock + double-checked loading (resolves the duplicate-load race previously noted as a benign limitation).
   - `multimodal.py` validates image-column values via `_resolve_image_path()` — rejects absolute paths, resolves relative paths against `ARTIFACTS_DIR`, and raises `ValueError` if the resolved path escapes the artifacts root (path-traversal mitigation).
-- `tasks/` — Background task manager: `manager.py` (ThreadPoolExecutor, default `max_workers=1`), `registry.py` (task_id → Task records).
-  - `manager.py` redirects stdout/stderr to the task log file during background execution via `set_thread_output_target()` (thread-local, safe at `max_workers > 1`). CANCELLED-before-execution branch now sets `finished_at` (terminal tasks always carry a completion timestamp). Task logs no longer include full Python tracebacks on failure — only the exception message is written to the user-facing FAILED line (traceback details are not exposed via `get_task_status` / `log_tail`).
+- `tasks/` — Background task manager: `manager.py` (ThreadPoolExecutor, default `max_workers=1`), `registry.py` (task_id → Task records), `progress.py` (best-effort AutoGluon log parser).
+  - `manager.py` redirects stdout/stderr to the task log file during background execution via `set_thread_output_target()` (thread-local, safe at `max_workers > 1`). CANCELLED-before-execution branch now sets `finished_at` (terminal tasks always carry a completion timestamp). Task logs no longer include full Python tracebacks on failure — only the exception message is written to the user-facing FAILED line (traceback details are not exposed via `get_task_status` / `log_tail`). `TaskManager.status()` attaches a `progress` field to the status dict (populated by `progress.parse_progress()`), surfaced via `get_task_status`.
   - `registry.py` uses a module-level `threading.RLock()` (re-entrant — `sweep()` re-enters store operations that take the lock), per-task `_state_lock`, sticky terminal states (SUCCESS/FAILED/CANCELLED — a cancel arriving after completion returns `already_terminal` instead of overwriting), and a `sweep()` that runs on `add`/`get`/`list`/`snapshot`/`require` to evict terminal tasks older than `MCP_TASK_RETENTION_SECONDS` or over the `MCP_TASK_MAX_RETAINED` cap. Running/pending tasks are never evicted. Looking up an evicted id raises a clear "Task expired or not found" which callers catch (not a crash).
+  - `progress.py` exports `parse_progress(log_path, status)` — best-effort parses the AutoGluon task log into a structured dict (`announced_models`, `models_attempted`, `latest_score`, `latest_model`, `metric`, `recent_lines`); never raises (returns `{"available": False, ...}` on missing/unreadable logs). Reports *latest* score (not a claimed "best") because metric direction is metric-dependent — AutoGluon orients `score_val` higher-is-better on the leaderboard but raw "Validation score" lines print native metric values.
 - `serialization/` — `envelope.py` (unified `{success, data, error}` response), `dataframe.py` (DataFrame → JSON-serializable dicts/lists).
 - `artifacts/` — Runtime directory for datasets, models, predictions (bind-mounted, gitignored).
-- `e2e_stdio.py` — Live stdio MCP round-trip harness at repo root. Spawns the server via the `mcp` SDK, asserts 24 tools are listed, and drives a full tabular flow end-to-end; asserts stdout stays clean (no AutoGluon leakage).
+- `e2e_stdio.py` — Live stdio MCP round-trip harness at repo root. Spawns the server via the `mcp` SDK, asserts 24 tools are listed, and drives a full tabular flow end-to-end; asserts stdout stays clean (no AutoGluon leakage). Re-verified in v0.3.0 against the rebuilt `:full` image — the new `progress` field is included in `get_task_status` responses without breaking the JSON-RPC flow.
 
 ## Stdout Pollution Fix (IMPORTANT)
 
@@ -132,8 +135,6 @@ AutoGluon/PyTorch/Lightning write progress bars + banners to stdout/stderr, whic
 - Training `fit()` can run for a long time; `cancel_task` is a **soft cancel** (cannot hard-kill a thread). Actual interruption relies on `time_limit` — always set a reasonable one.
 - streamable-http mode is currently **unauthenticated** — trusted networks only.
 - Windows-native Python execution is not supported.
-- Progress parsing (live training-log tailing) is not implemented — poll `get_task_status` for `log_tail`.
-- CI lint pipeline and 80% test-coverage target are not yet in place (optional).
 
 ## Hardening Round — 2026-07-09 (post-v0.2.0, e2e-runner + code-reviewer)
 
@@ -150,6 +151,29 @@ AutoGluon/PyTorch/Lightning write progress bars + banners to stdout/stderr, whic
 4. **HIGH — exception leakage** (`tools/_common.py`, `server.py`, all `tools/*.py`). Public tools raised `ValueError` before `envelope_call`, bypassing the unified `{success, data, error}` envelope. **Fixed:** added `safe_tool` decorator in `tools/_common.py`, applied to every public tool. `server.py` also wraps registered tools with `safe_tool` as defense-in-depth. `functools.wraps` preserves FastMCP schemas.
 5. **HIGH — traceback leakage** (`tasks/manager.py`). Full `traceback.format_exc()` was written to task logs, exposed via `get_task_status` / `log_tail`. **Fixed:** removed `traceback` import and the full traceback from the user-facing FAILED log line; only the exception message is retained.
 6. **MEDIUM — LRU duplicate-load race** (`tools/model_management.py`). `_load_model` had a non-atomic check-then-set; under `MCP_MAX_WORKERS>1` two concurrent loads of the same uncached model were redundant. **Fixed:** added `get_or_load()` to `_ModelLRUCache` with a per-cache load lock + double-checked loading; `_load_model` now uses it. This resolves the "benign LRU duplicate-load race" previously listed under Known Limitations (entry removed).
+
+## v0.3.0 Engineering Round — 2026-07-09 (CI lint, progress parsing, 80% coverage)
+
+**Test counts after this round:** `:latest` **84 passed, 2 skipped**; `:full` **88 passed, 0 skipped, 0 failed** (~3.3 min). Coverage: **90%** in `:full` (80% target MET), 73% total / 91% of testable source in `:latest`. `ruff check .` clean.
+
+### CI lint pipeline
+
+1. `.github/workflows/lint.yml` — new workflow: runs `ruff check .` on push/PR to master + `workflow_dispatch`. Formatting enforcement (`ruff format`) intentionally omitted (repo not format-normalized; would be churn).
+2. `pyproject.toml` — added `[tool.ruff.lint.per-file-ignores]` section: `"tests/*" = ["E402"]` so test files may place imports after `pytest.importorskip(...)`. Clears pre-existing E402 lint error in tests.
+
+### Progress parsing
+
+3. `tasks/progress.py` — new module exporting `parse_progress(log_path, status)`: best-effort parses the AutoGluon task log into a structured dict (`announced_models`, `models_attempted`, `latest_score`, `latest_model`, `metric`, `recent_lines`); never raises (returns `{"available": False, ...}` on missing/unreadable logs). Design note: reports *latest* score (not a claimed "best") because metric direction (higher/lower is better) is metric-dependent — AutoGluon orients `score_val` higher-is-better on the leaderboard but raw "Validation score" lines print native metric values.
+4. `tasks/manager.py` — `TaskManager.status()` attaches a `progress` field to the status dict, surfaced via `get_task_status`.
+5. `tests/test_progress.py` — 6 new tests for the progress parser.
+
+### 80% test coverage
+
+6. `tests/test_coverage_gaps.py` — targeted pure-logic branch tests for config/serialization/tools.data/tools.model_management/tasks.manager (no AutoGluon needed). Target met: **90%** coverage in `:full` (1089 stmts, 109 miss).
+
+### Re-verification
+
+Live stdio MCP e2e re-verified against rebuilt `:full` image — 24 tools listed; full tabular round-trip with the new `progress` field present in `get_task_status` responses; stdout clean.
 
 ## Additional Bugs Found + Fixed in `:full` Verification Pass
 
@@ -180,16 +204,18 @@ All 10 items verified against real AutoGluon 1.5.0 in `sy-automl-mcp:full`:
 Root: server.py, config.py, Dockerfile, Dockerfile.test, docker-compose.yml,
       pyproject.toml, requirements.txt, requirements-full.txt, requirements-dev.txt,
       CLAUDE.md, PLAN.md, README.md, PROGRESS.md, .gitignore, .dockerignore,
-      .python-version, .github/workflows/docker.yml, e2e_stdio.py
+      .python-version, .github/workflows/docker.yml, .github/workflows/lint.yml,
+      e2e_stdio.py
 
 tools/: tabular.py, timeseries.py, multimodal.py, model_management.py,
         data.py, task_status.py, _common.py
 
-tasks/: manager.py, registry.py
+tasks/: manager.py, registry.py, progress.py
 
 serialization/: envelope.py, dataframe.py
 
 tests/: test_tabular.py, test_timeseries.py, test_multimodal.py,
         test_model_management.py, test_envelope.py, test_serialization.py,
-        test_data.py, test_tasks.py, test_stdout_threading.py, conftest.py
+        test_data.py, test_tasks.py, test_stdout_threading.py,
+        test_progress.py, test_coverage_gaps.py, conftest.py
 ```

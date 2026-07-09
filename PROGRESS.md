@@ -1,19 +1,21 @@
 # PROGRESS.md — sy-automl-mcp 开发进度
 
-> 最后更新：2026-07-09（v0.2.0 + hardening round）
+> 最后更新：2026-07-09（v0.3.0 — CI lint, progress parsing, 80% coverage）
 
 ## 当前状态
 
-**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.2.0 已发布。Hardening round（2026-07-09）已完成。**
+**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.3.0 已发布。Hardening round（2026-07-09）已完成。v0.3.0 engineering round（2026-07-09）已完成。**
 
-- `:latest` 镜像（tabular）：**52 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）
-- `:full` 镜像（tabular + timeseries + multimodal）：**56 passed, 0 skipped, 0 failed**（~2.5 min）
+- `:latest` 镜像（tabular）：**84 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）。覆盖率：73% 总计但 91% 可测源码
+- `:full` 镜像（tabular + timeseries + multimodal）：**88 passed, 0 skipped, 0 failed**（~3.3 min）。覆盖率：**90%**（1089 stmts, 109 miss）。**80% 目标达成**
 - 所有 24 个 MCP 工具在真实 AutoGluon 1.5.0 上验证通过
 - stdout 污染已修复（线程本地代理 + 两层防御，已验证 stdio 无泄漏，并发 worker 安全）
 - 10 项 `:full` 检查清单全部 PASS/FIXED
 - Phase 3 四项技术债务全部解决（取消竞争、LRU 缓存、任务保留、线程安全 stdout）
 - Hardening round 6 项修复全部完成（2 API 漂移 + 路径穿越 + 异常泄漏 + 回溯泄漏 + LRU 竞争）
-- Live stdio MCP e2e 在 `:full` 中 **PASSED**（24 tools + 干净 stdout）
+- v0.3.0: CI lint pipeline ✅, 进度解析 ✅, 80% 测试覆盖率 ✅
+- `ruff check .` — **clean**
+- Live stdio MCP e2e 在 `:full` 中 **PASSED**（24 tools + 干净 stdout + `progress` 字段正常出现在 `get_task_status` 响应中）
 
 ## Phase 1 — Tabular + stdio + 后台任务 ✅
 
@@ -73,9 +75,9 @@
 - ✅ **LRU 预测器缓存**（v0.2.0）— `_ModelLRUCache`（OrderedDict），`MCP_MODEL_CACHE_MAX`（默认 4）
 - ✅ **任务保留策略**（v0.2.0）— `sweep()` 淘汰终态任务（`MCP_TASK_RETENTION_SECONDS`、`MCP_TASK_MAX_RETAINED`），永不淘汰运行中/等待中任务
 - ✅ **线程安全 stdout 重定向**（v0.2.0）— `_ThreadLocalOutputProxy` + `set_thread_output_target()` / `reset_thread_output_target()`；`max_workers > 1` 安全
-- ❌ 进度解析增强（可选）
-- ❌ CI lint pipeline（可选）
-- ❌ 80% 测试覆盖率（可选）
+- ✅ **进度解析增强**（v0.3.0）— `tasks/progress.py` 提供 `parse_progress()`，通过 `TaskManager.status()` 在 `get_task_status` 响应中以 `progress` 字段呈现
+- ✅ **CI lint pipeline**（v0.3.0）— `.github/workflows/lint.yml`，`ruff check .` 在 push/PR 到 master 时运行
+- ✅ **80% 测试覆盖率**（v0.3.0）— `:full` 中达到 90%（1089 stmts, 109 miss）；`tests/test_coverage_gaps.py` 补充纯逻辑分支测试
 
 ## v0.2.0 额外修复（审查/验证期间发现）
 
@@ -90,13 +92,12 @@
 - 训练 `fit()` 可能运行很久；`cancel_task` 为软取消，实际中断依赖 `time_limit`
 - streamable-http 模式当前无认证
 - Windows 原生 Python 不在支持范围
-- 进度解析（实时训练日志 tailing）未实现
-- CI lint pipeline 与 80% 测试覆盖率目标尚未到位（可选）
 
 ## Git 状态
 
 - `6134717` feat: AutoGluon MCP server — tabular/timeseries/multimodal tools, Docker-first, background task manager, stdout-pollution guard, 33 tests passing（初始 commit）
-- `v0.2.0` tag 已打并推送
+- `1b9bf52` fix: AutoGluon 1.5.0 API drift + security/error-handling hardening
+- `v0.1.0`、`v0.2.0`、`v0.3.0` tags 已打并推送
 - Remote `origin` = `https://github.com/noahwang550/sy-automl-mcp.git`（HTTPS + GCM）
 - GHCR publish workflow 在 `v*` tag 时触发
 
@@ -122,13 +123,33 @@
 - `tests/test_timeseries.py` (+1): `test_evaluate_timeseries_with_metrics_list`
 - `tests/test_multimodal.py` (+1): `test_train_multimodal_rejects_unknown_problem_type`
 
+## v0.3.0 Engineering Round — 2026-07-09（CI lint, progress parsing, 80% coverage）
+
+**测试计数：** `:latest` **84 passed, 2 skipped**；`:full` **88 passed, 0 skipped, 0 failed**（~3.3 min）。覆盖率：`:full` **90%**，`:latest` 73% 总计 / 91% 可测源码。`ruff check .` clean。
+
+### CI lint pipeline
+
+1. `.github/workflows/lint.yml` — 新增 workflow：在 push/PR 到 master 时运行 `ruff check .`，支持 `workflow_dispatch`。格式检查（`ruff format`）故意不包含（仓库未做格式统一，会引起大量变更）。
+2. `pyproject.toml` — 新增 `[tool.ruff.lint.per-file-ignores]`：`"tests/*" = ["E402"]`，允许测试文件在 `pytest.importorskip(...)` 之后放置 import。
+
+### 进度解析
+
+3. `tasks/progress.py` — 新增模块，导出 `parse_progress(log_path, status)`：尽力解析 AutoGluon 任务日志为结构化字典（`announced_models`、`models_attempted`、`latest_score`、`latest_model`、`metric`、`recent_lines`）；永不抛异常（缺失/不可读日志返回 `{"available": False, ...}`）。设计说明：报告 *最新* 分数（非声称的"最佳"），因为指标方向（越高/越低越好）取决于具体指标。
+4. `tasks/manager.py` — `TaskManager.status()` 在状态字典中附加 `progress` 字段，通过 `get_task_status` 呈现。
+5. `tests/test_progress.py` — 6 个新测试。
+
+### 80% 测试覆盖率
+
+6. `tests/test_coverage_gaps.py` — 针对 config/serialization/tools.data/tools.model_management/tasks.manager 的纯逻辑分支测试（无需 AutoGluon）。目标达成：`:full` 中 **90%** 覆盖率。
+
+### 重新验证
+
+Live stdio MCP e2e 在重建的 `:full` 镜像上重新验证通过 — 24 工具列表 + 完整 tabular 往返 + 新 `progress` 字段正常出现在 `get_task_status` 响应中 + stdout 干净。
+
 ## 下一步
 
 **无验证缺口。** 剩余可选工作：
-1. （可选）CI lint pipeline
-2. （可选）80% 测试覆盖率
-3. （可选）进度解析增强（实时训练日志 tailing）
-4. （可选）streamable-http 认证
+1. （可选）streamable-http 认证
 
 ## 环境备忘
 

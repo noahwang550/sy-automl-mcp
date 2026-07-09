@@ -26,6 +26,7 @@ from typing import Any
 from config import MCP_MAX_WORKERS, ensure_dirs, log_path
 from tools._common import reset_thread_output_target, set_thread_output_target
 
+from .progress import parse_progress
 from .registry import _TERMINAL, CANCELLED, CANCELLING, FAILED, RUNNING, SUCCESS, Task, TaskStore
 
 __all__ = ["Task", "TaskManager", "get_task_manager"]
@@ -156,7 +157,12 @@ class TaskManager:
         return self.store.require(task_id)
 
     def status(self, task_id: str) -> dict[str, Any]:
-        return self.store.require(task_id).to_dict()
+        task = self.store.require(task_id)
+        d = task.to_dict()
+        # Surface parsed training progress (models attempted, latest validation
+        # score, recent log lines) alongside the raw log_tail.
+        d["progress"] = parse_progress(task.log_path, task.status)
+        return d
 
     def result(self, task_id: str) -> dict[str, Any]:
         task = self.store.require(task_id)

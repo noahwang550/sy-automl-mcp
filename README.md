@@ -1,10 +1,20 @@
 # sy-automl-mcp
 
-> **v0.2.0** — Phase 1 + Phase 2 + Phase 3 all complete. 56 tests pass on `:full`, 52+2 skip on `:latest`. Live stdio MCP e2e verified.
+> **v0.3.0** — Phase 1 + Phase 2 + Phase 3 all complete. 88 tests pass on `:full` (90% coverage), 84+2 skip on `:latest`. Live stdio MCP e2e verified. CI lint (`ruff check`) green.
 
 将 [AutoGluon](https://github.com/autogluon/autogluon) 的 AutoML 能力封装为 **MCP (Model Context Protocol) 服务**，让 AI 助手（如 Claude Code）通过标准 MCP 工具调用完成数据加载、模型训练、预测、评估、模型管理全流程。
 
 > **运行环境：Docker 优先。** AutoGluon 官方仅支持 Linux/macOS，原生 Windows 下多模态/torch 依赖不稳定。本项目通过 Linux 容器运行 MCP server，宿主为 Windows 时使用 Docker Desktop 即可，无需 WSL2 直装。
+
+## What's New in v0.3.0
+
+Engineering round — 3 optional items completed:
+
+1. **CI lint pipeline** — `.github/workflows/lint.yml` runs `ruff check .` on push/PR to master. `ruff check .` now passes clean.
+2. **Progress parsing** — `tasks/progress.py` best-effort parses AutoGluon task logs into a structured dict (`announced_models`, `models_attempted`, `latest_score`, `latest_model`, `metric`, `recent_lines`), surfaced as a `progress` field on `get_task_status` responses. Never raises on missing/unreadable logs.
+3. **80% test coverage target met** — 90% coverage in `:full` (1089 stmts, 109 miss). `tests/test_coverage_gaps.py` adds targeted pure-logic branch tests.
+
+**Test counts:** `:latest` 84 passed / 2 skipped, `:full` 88 passed / 0 skipped. Live stdio MCP e2e re-verified with the new `progress` field.
 
 ## What's New in v0.2.0
 
@@ -35,7 +45,7 @@ Post-v0.2.0 fixes from e2e-runner (AutoGluon 1.5.0 API-drift hunt) and code-revi
 | Phase 2 — TimeSeries / Multimodal / 模型管理 | ✅ 已验证 | 在 `:full` 镜像中对真实 AutoGluon 验证通过；10 项检查清单全部 PASS/FIXED |
 | Phase 3 — 加固（错误信封、资源限制、LRU、保留策略、线程安全、CI） | ✅ 完成 | envelope ✅，资源限制 ✅，stdout 污染修复 ✅，线程安全 ✅，LRU 缓存 ✅，任务保留 ✅，取消竞争 ✅ |
 
-**测试计数（v0.2.0 + hardening round）：** `:latest` **52 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）；`:full` **56 passed, 0 skipped, 0 failed**（~2.5 min）。Live stdio MCP e2e：**PASSED**（24 个工具 + 干净 stdout）。
+**测试计数（v0.3.0）：** `:latest` **84 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中；覆盖率 73% 总计但 91% 可测源码）；`:full` **88 passed, 0 skipped, 0 failed**（~3.3 min，覆盖率 **90%**）。Live stdio MCP e2e：**PASSED**（24 个工具 + 干净 stdout + `progress` 字段正常呈现）。`ruff check .` clean。
 
 **关键事实：** 镜像 `sy-automl-mcp:latest`（tabular tier，autogluon.tabular 1.5.0 + pandas 2.3.3）和 `sy-automl-mcp:full`（+ timeseries + multimodal）均已构建并通过全部测试。MCP server stdio 启动正常，`tools/list` 返回 24 个工具。stdout 污染已通过线程本地代理 + 两层防御（`verbosity=0` + stdout/stderr 重定向）解决，`max_workers > 1` 安全。
 
@@ -203,8 +213,6 @@ AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，
 - 训练 `fit()` 可能运行很久；`cancel_task` 为**软取消**（无法硬杀线程），实际中断依赖 `time_limit`，请始终为训练设置合理的 `time_limit`。
 - streamable-http 模式当前**无认证**，仅限可信网络。
 - Windows 原生 Python 运行不在支持范围。
-- 进度解析（实时训练日志 tailing）未实现 —— 通过 `get_task_status` 轮询 `log_tail`。
-- CI lint pipeline 与 80% 测试覆盖率目标尚未到位（可选）。
 
 > **安全说明（hardening round）：** 多模态工具的图像列路径已通过 `_resolve_image_path()` 限制在 `ARTIFACTS_DIR` 内（路径穿越缓解）。所有公开工具通过 `safe_tool` 装饰器保证统一信封返回（异常不泄漏）。任务日志不再包含完整 Python 回溯（仅异常消息）。LRU 缓存重复加载竞争已通过 `get_or_load()` 解决。
 

@@ -24,6 +24,12 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]
 
+# Test files legitimately place imports after `pytest.importorskip(...)` (the
+# heavy AutoGluon import must be skipped on hosts without it). E402 is the
+# standard allowance for this pattern.
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

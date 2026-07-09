@@ -1,0 +1,36 @@
+name: lint
+
+# Run ruff on every push to master and on pull requests. Keeps style drift and
+# unused imports out of the main branch independently of the (tag-triggered)
+# image publish workflow.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ruff
+        run: pip install "ruff>=0.5"
+
+      - name: Ruff check
+        # Enforce lint rules (E/F/W/I/UP/B from [tool.ruff.lint]). Formatting is
+        # not yet normalized across the repo, so `ruff format` is intentionally
+        # out of scope for this workflow.
+        run: ruff check .
