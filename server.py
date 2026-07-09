@@ -14,6 +14,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from config import MCP_HOST, MCP_PORT, MCP_TRANSPORT, ensure_dirs
+from tools._common import safe_tool
 from tools.data import load_dataset, validate_dataset
 from tools.model_management import delete_model, list_models, load_model, model_info
 from tools.multimodal import evaluate_multimodal, predict_multimodal, train_multimodal
@@ -79,7 +80,7 @@ for _fn in (
     cancel_task,
     list_tasks,
 ):
-    mcp.tool()(_fn)
+    mcp.tool()(safe_tool(_fn))
 
 
 def main() -> None:

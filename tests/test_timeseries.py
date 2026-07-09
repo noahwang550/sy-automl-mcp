@@ -78,3 +78,27 @@ def test_train_timeseries_and_predict(isolated_artifacts):
 
     eval_res = _data(evaluate_timeseries("ts_model", "ts"))
     assert "metrics" in eval_res
+
+
+def test_evaluate_timeseries_with_metrics_list(isolated_artifacts):
+    from tasks import get_task_manager
+
+    mgr = get_task_manager()
+    load_dataset(source=_tsv_csv(), dataset_id="ts2")
+    res = train_timeseries(
+        dataset_id="ts2",
+        target="target",
+        model_id="ts_model2",
+        prediction_length=2,
+        time_column="timestamp",
+        id_column="item_id",
+        time_limit=30,
+        presets=None,
+    )
+    payload = _data(res)
+    status = _wait(payload["task_id"], mgr)
+    assert status == SUCCESS, mgr.result(payload["task_id"])
+
+    ev = _data(evaluate_timeseries("ts_model2", "ts2", metrics=["MAPE", "RMSE"]))
+    assert isinstance(ev["metrics"], dict)
+    assert len(ev["metrics"]) > 0

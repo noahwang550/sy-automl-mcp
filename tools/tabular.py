@@ -23,7 +23,7 @@ from serialization import failure, to_jsonable
 from tasks import get_task_manager
 from tasks.manager import Task
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 from .data import read_dataset_df, read_inline_or_dataset
 
 
@@ -221,9 +221,9 @@ def _feature_importance_tabular(model_id: str, dataset_id: str | None = None) ->
     predictor = _load_predictor(model_id)
     data = read_dataset_df(dataset_id) if dataset_id else None
     if data is not None:
-        fi = predictor.feature_importance(data, silent=True, verbosity=0)
+        fi = predictor.feature_importance(data, silent=True)
     else:
-        fi = predictor.feature_importance(None, silent=True, feature_stage="transformed", verbosity=0)
+        fi = predictor.feature_importance(None, silent=True, feature_stage="transformed")
     return {"model_id": model_id, "importances": to_jsonable(fi)}
 
 
@@ -250,12 +250,14 @@ def fit_summary_tabular(model_id: str) -> dict[str, Any]:
 def _evaluate_tabular(model_id: str, dataset_id: str, metrics: list[str] | None = None) -> dict[str, Any]:
     predictor = _load_predictor(model_id)
     df = read_dataset_df(dataset_id)
-    # TabularPredictor.evaluate takes a single metric string.
+    # AutoGluon 1.5.0's TabularPredictor.evaluate() takes no `metric` kwarg;
+    # it always returns a dict of all available metrics (the eval_metric plus
+    # auxiliary_metrics). Call it once, then filter to the requested subset.
+    scores: dict[str, Any] = predictor.evaluate(df)
     if metrics:
-        score = predictor.evaluate(df, metric=metrics[0])
-    else:
-        score = predictor.evaluate(df)
-    return {"model_id": model_id, "dataset_id": dataset_id, "metrics": to_jsonable(score)}
+        wanted = {m: scores[m] for m in metrics if m in scores}
+        scores = wanted
+    return {"model_id": model_id, "dataset_id": dataset_id, "metrics": to_jsonable(scores)}
 
 
 def evaluate_tabular(
@@ -265,3 +267,11 @@ def evaluate_tabular(
     validate_id(model_id, "model_id")
     validate_id(dataset_id, "dataset_id")
     return envelope_call(_evaluate_tabular, model_id, dataset_id, metrics)
+
+# Wrap public tools so direct imports also return the unified envelope.
+train_tabular = safe_tool(train_tabular)
+predict_tabular = safe_tool(predict_tabular)
+leaderboard_tabular = safe_tool(leaderboard_tabular)
+feature_importance_tabular = safe_tool(feature_importance_tabular)
+fit_summary_tabular = safe_tool(fit_summary_tabular)
+evaluate_tabular = safe_tool(evaluate_tabular)

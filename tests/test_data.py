@@ -70,6 +70,7 @@ def test_read_inline_or_dataset_requires_exactly_one(isolated_artifacts, iris_cs
 
 import tools.data as data_module
 
+
 def test_load_dataset_enforces_size_limit(monkeypatch, isolated_artifacts, iris_csv):
     """A dataset with more rows than MAX_DATASET_ROWS is rejected gracefully."""
     monkeypatch.setattr(data_module, "MAX_DATASET_ROWS", 2)

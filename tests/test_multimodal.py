@@ -69,3 +69,17 @@ def test_train_multimodal_and_predict(isolated_artifacts):
 
     eval_res = _data(evaluate_multimodal("mm_model", "mm"))
     assert "metrics" in eval_res
+
+
+def test_train_multimodal_rejects_unknown_problem_type(isolated_artifacts):
+    from tools.multimodal import train_multimodal
+
+    res = train_multimodal(
+        dataset_id="mm",
+        model_id="mm_model_bad",
+        label="label",
+        problem_type="unknown_type",
+    )
+    assert res["success"] is False
+    assert "Invalid problem_type" in res["error"]
+

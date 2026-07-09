@@ -5,7 +5,7 @@ from typing import Any
 
 from tasks import get_task_manager
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 
 
 def get_task_status(task_id: str) -> dict[str, Any]:
@@ -34,3 +34,9 @@ def cancel_task(task_id: str) -> dict[str, Any]:
 def list_tasks() -> dict[str, Any]:
     """List all known background tasks (most recent last)."""
     return envelope_call(get_task_manager().list)
+
+# Wrap public tools so direct imports also return the unified envelope.
+get_task_status = safe_tool(get_task_status)
+get_task_result = safe_tool(get_task_result)
+cancel_task = safe_tool(cancel_task)
+list_tasks = safe_tool(list_tasks)

@@ -8,6 +8,7 @@ readable.
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import sys
 import threading
@@ -138,3 +139,20 @@ def envelope_call(fn: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any) 
             return success(fn(*args, **kwargs))
         except Exception as exc:  # noqa: BLE001 (MCP tools must not leak exceptions)
             return failure(exc)
+
+
+def safe_tool(fn: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    """Decorator that ensures a tool always returns the unified envelope.
+
+    Any unhandled exception raised by the wrapped tool is converted into a
+    failure envelope, so the MCP layer never receives a raw exception.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 (MCP tools must not leak exceptions)
+            return failure(exc)
+
+    return wrapper

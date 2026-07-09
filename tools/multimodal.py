@@ -23,7 +23,7 @@ from serialization import failure, to_jsonable
 from tasks import get_task_manager
 from tasks.manager import Task
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 from .data import read_dataset_df, read_inline_or_dataset
 
 _VALID_PROBLEM_TYPES = {
@@ -58,6 +58,16 @@ def _load_predictor(model_id: str):
 # ---------------------------------------------------------------------------
 
 
+def _resolve_image_path(img: str) -> Path:
+    """Resolve an image path relative to ARTIFACTS_DIR, rejecting traversal."""
+    path = Path(img)
+    if path.is_absolute():
+        raise ValueError(f"Image path must be relative to the artifacts directory: {img!r}")
+    resolved = (ARTIFACTS_DIR / img).resolve()
+    if not resolved.is_relative_to(ARTIFACTS_DIR.resolve()):
+        raise ValueError(f"Image path escapes artifacts directory: {img!r}")
+    return resolved
+
 def _train_multimodal_job(task: Task) -> dict[str, Any]:
     p = task.params
     df = read_dataset_df(p["dataset_id"])
@@ -71,7 +81,8 @@ def _train_multimodal_job(task: Task) -> dict[str, Any]:
     if image_col is not None:
         missing_imgs = []
         for img in df[image_col].dropna().astype(str):
-            if not Path(img).exists() and not (ARTIFACTS_DIR / img).exists():
+            resolved = _resolve_image_path(img)
+            if not resolved.exists():
                 missing_imgs.append(img)
         if missing_imgs:
             raise FileNotFoundError(
@@ -227,3 +238,8 @@ def evaluate_multimodal(
     validate_id(model_id, "model_id")
     validate_id(dataset_id, "dataset_id")
     return envelope_call(_evaluate_multimodal, model_id, dataset_id, metrics)
+
+# Wrap public tools so direct imports also return the unified envelope.
+train_multimodal = safe_tool(train_multimodal)
+predict_multimodal = safe_tool(predict_multimodal)
+evaluate_multimodal = safe_tool(evaluate_multimodal)

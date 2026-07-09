@@ -16,7 +16,7 @@ from config import (
 )
 from serialization import sample_rows
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 
 # Single-file dataset layout: artifacts/datasets/<dataset_id>/data.<ext>
 _DATA_FILENAME = "data"
@@ -221,3 +221,7 @@ def read_inline_or_dataset(
     if dataset_id is not None:
         return read_dataset_df(dataset_id)
     return pd.read_csv(io.StringIO(inline_csv))  # type: ignore[arg-type]
+
+# Wrap public tools so direct imports also return the unified envelope.
+load_dataset = safe_tool(load_dataset)
+validate_dataset = safe_tool(validate_dataset)

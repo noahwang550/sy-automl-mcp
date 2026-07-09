@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-import traceback
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -143,7 +142,7 @@ class TaskManager:
                     task.error = f"{type(exc).__name__}: {exc}"
                     task.status = FAILED
                     task.finished_at = time.time()
-                    _log(f"FAILED {task.error}\n{traceback.format_exc()}")
+                    _log(f"FAILED {task.error}")
         finally:
             if logf:
                 try:

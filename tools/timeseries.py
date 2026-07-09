@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 import pandas as pd
+
 from config import (
     INLINE_ROW_THRESHOLD,
     directory_size_bytes,
@@ -23,7 +24,7 @@ from serialization import to_jsonable
 from tasks import get_task_manager
 from tasks.manager import Task
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 from .data import read_dataset_df
 
 
@@ -276,3 +277,10 @@ def fit_summary_timeseries(model_id: str) -> dict[str, Any]:
     """Return predictor.fit_summary() for a time-series model."""
     validate_id(model_id, "model_id")
     return envelope_call(_fit_summary_timeseries, model_id)
+
+# Wrap public tools so direct imports also return the unified envelope.
+train_timeseries = safe_tool(train_timeseries)
+predict_timeseries = safe_tool(predict_timeseries)
+leaderboard_timeseries = safe_tool(leaderboard_timeseries)
+evaluate_timeseries = safe_tool(evaluate_timeseries)
+fit_summary_timeseries = safe_tool(fit_summary_timeseries)

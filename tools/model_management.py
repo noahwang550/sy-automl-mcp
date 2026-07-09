@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from typing import Any
 
 from config import (
@@ -14,7 +15,7 @@ from config import (
     validate_id,
 )
 
-from ._common import envelope_call
+from ._common import envelope_call, safe_tool
 
 
 class _ModelLRUCache:
@@ -24,6 +25,7 @@ class _ModelLRUCache:
         self._max_size = max_size
         self._cache: OrderedDict[str, Any] = OrderedDict()
         self._lock = threading.Lock()
+        self._load_lock = threading.Lock()
 
     def get(self, model_id: str) -> Any | None:
         with self._lock:
@@ -38,6 +40,19 @@ class _ModelLRUCache:
             self._cache.move_to_end(model_id)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
+
+    def get_or_load(self, model_id: str, loader: Callable[[], Any]) -> Any:
+        """Load and cache a predictor atomically, avoiding duplicate loads."""
+        predictor = self.get(model_id)
+        if predictor is not None:
+            return predictor
+        with self._load_lock:
+            predictor = self.get(model_id)
+            if predictor is not None:
+                return predictor
+            predictor = loader()
+            self.set(model_id, predictor)
+        return predictor
 
     def pop(self, model_id: str) -> Any | None:
         with self._lock:
@@ -131,8 +146,8 @@ def _load_model(model_id: str) -> dict[str, Any]:
     entry = _registry_entry(model_id)
     if entry is None:
         raise FileNotFoundError(f"Model not found in registry: {model_id}")
-    if _model_cache.get(model_id) is None:
-        _model_cache.set(model_id, _load_predictor_obj(entry))
+    # Loading is serialized per cache to avoid duplicate heavy loads.
+    _model_cache.get_or_load(model_id, lambda: _load_predictor_obj(entry))
     return {
         "model_id": model_id,
         "status": "loaded",
@@ -171,3 +186,9 @@ def delete_model(model_id: str, confirm: bool = False) -> dict[str, Any]:
 
 # Backwards-compatible alias used by the plan.
 load_predictor = load_model
+
+# Wrap public tools so direct imports also return the unified envelope.
+list_models = safe_tool(list_models)
+model_info = safe_tool(model_info)
+load_model = safe_tool(load_model)
+delete_model = safe_tool(delete_model)
