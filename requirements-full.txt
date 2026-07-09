@@ -1,0 +1,5 @@
+# Full tier: tabular + timeseries + multimodal.
+# Multimodal pulls torch/torchvision (large). Use the "full" Docker build tier.
+-r requirements.txt
+autogluon.timeseries>=1.1.0
+autogluon.multimodal>=1.1.0

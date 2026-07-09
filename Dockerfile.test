@@ -1,0 +1,3 @@
+FROM python:3.11-slim
+RUN pip install --progress-bar off --retries 10 --timeout 60 pandas numpy pytest
+WORKDIR /app

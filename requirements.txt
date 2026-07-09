@@ -1,0 +1,11 @@
+# MCP runtime
+mcp>=1.2.0
+
+# Data
+pandas>=2.0
+pyarrow>=14.0
+
+# AutoGluon — install tier controlled by Docker build arg / extras.
+# Tabular-only is the default MVP install; multimodal pulled in via
+# the "full" tier in the Dockerfile.
+autogluon.tabular>=1.1.0

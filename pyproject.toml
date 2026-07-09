@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sy-automl-mcp"
+version = "0.1.0"
+description = "AutoGluon AutoML exposed as an MCP server for AI assistants"
+requires-python = ">=3.10,<3.12"
+readme = "README.md"
+
+[project.scripts]
+sy-automl-mcp = "server:main"
+
+[tool.setuptools]
+py-modules = ["server", "config"]
+packages = ["tools", "tasks", "serialization"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true

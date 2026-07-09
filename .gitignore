@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# AutoGluon / model artifacts (runtime, never commit)
+artifacts/
+*.pkl
+*.ckpt
+*.pt
+*.pth
+*.onnx
+AutogluonModels/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local env
+.env
+.env.local

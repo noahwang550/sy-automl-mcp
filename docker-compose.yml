@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TIER: tabular
+    image: sy-automl-mcp:latest
+    container_name: sy-automl-mcp
+    # stdio transport by default; set MCP_TRANSPORT=http to expose a port.
+    environment:
+      MCP_TRANSPORT: ${MCP_TRANSPORT:-stdio}
+      MCP_PORT: ${MCP_PORT:-8000}
+      MCP_MAX_WORKERS: ${MCP_MAX_WORKERS:-1}
+    volumes:
+      - ./artifacts:/app/artifacts
+    # When MCP_TRANSPORT=http, publish the port; stdio mode keeps stdin/open.
+    stdin_open: true
+    tty: true
+    ports:
+      - "${MCP_PORT:-8000}:${MCP_PORT:-8000}"
+    profiles: [""]  # default profile
