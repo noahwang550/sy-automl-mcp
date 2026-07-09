@@ -8,7 +8,7 @@
 |------|------|------|
 | **Phase 1** — Tabular + stdio + 后台任务 | ✅ 完成并验证 | 31 测试通过，端到端 stdio 流程经 e2e-runner 确认；镜像 `sy-automl-mcp:latest` 可运行 |
 | **Phase 2** — TimeSeries / Multimodal / 模型管理 | ✅ 完成并验证 | `:full` 镜像中真实 AutoGluon 验证通过；33 测试全部通过（0 skip）；10 项检查清单全部 PASS/FIXED |
-| **Phase 3** — 加固 | 🔶 部分完成 | envelope ✅，资源限制 ✅，stdout 污染修复 ✅；进度解析 ❌，CI lint ❌，80% 覆盖率 ❌ |
+| **Phase 3** — 加固 | ✅ 完成（v0.2.0） | envelope ✅，资源限制 ✅，stdout 污染修复 ✅（线程本地代理），取消竞争 ✅，LRU 缓存 ✅，任务保留 ✅，线程安全 stdout ✅；可选项未做：进度解析、CI lint、80% 覆盖率 |
 
 ## 需求清单
 
@@ -212,18 +212,23 @@ D:\claudecode\sy-automl-mcp\
 
 **状态：** ✅ 全部完成，`sy-automl-mcp:full` 镜像中真实 AutoGluon 验证通过。33 测试通过，0 skip，0 失败。
 
-### Phase 3: 加固 — 错误处理、并发、文档、测试 🔶
+### Phase 3: 加固 — 错误处理、并发、文档、测试 ✅（v0.2.0）
 
 17. ~~**错误处理统一**~~ ✅ — `serialization/envelope.py` 统一 `{success, data, error}` 返回格式
 18. ~~**并发与资源控制**~~ ✅ — `MCP_MAX_WORKERS` 配置，`MAX_DATASET_ROWS/MB/COLUMNS` 资源限制
-19. **进度查询增强** ❌ — 训练日志解析未实现
-20. **工具参考文档** ❌ — docs/tools_reference.md 未创建
-21. **架构文档** ❌ — docs/architecture.md 未创建
-22. **测试覆盖率** ❌ — 目标 80% 未达标
-23. **CI 与 lint** ❌ — 仅有 docker.yml（GHCR publish），缺 CI lint pipeline
-24. ~~**Stdout 污染修复**~~ ✅ — 两层防御（`_suppress_output()` + 后台 worker 重定向 + `verbosity=0`），已验证 stdio 无泄漏
+19. **进度查询增强** ❌（可选） — 训练日志解析未实现；当前通过 `get_task_status` 轮询 `log_tail`
+20. **工具参考文档** ❌（可选） — docs/tools_reference.md 未创建
+21. **架构文档** ❌（可选） — docs/architecture.md 未创建
+22. **测试覆盖率** ❌（可选） — 目标 80% 未达标
+23. **CI 与 lint** ❌（可选） — 仅有 docker.yml（GHCR publish），缺 CI lint pipeline
+24. ~~**Stdout 污染修复**~~ ✅ — 线程本地代理（`_ThreadLocalOutputProxy`）+ 两层防御（`_suppress_output()` + 后台 worker 重定向 + `verbosity=0`），已验证 stdio 无泄漏，并发 worker 安全
+25. ~~**取消竞争修复**~~ ✅（v0.2.0）— per-task `_state_lock`，终态粘性（SUCCESS/FAILED/CANCELLED），`already_terminal` 返回；registry 锁升级为 `RLock`
+26. ~~**LRU 预测器缓存**~~ ✅（v0.2.0）— `_ModelLRUCache`（OrderedDict），`MCP_MODEL_CACHE_MAX`（默认 4）
+27. ~~**任务保留策略**~~ ✅（v0.2.0）— `sweep()` 淘汰终态任务（`MCP_TASK_RETENTION_SECONDS`、`MCP_TASK_MAX_RETAINED`），永不淘汰运行中/等待中任务；过期 ID 查找抛出清晰异常
+28. ~~**线程安全 stdout 重定向**~~ ✅（v0.2.0）— `_ThreadLocalOutputProxy` + `set_thread_output_target()` / `reset_thread_output_target()`；`max_workers > 1` 安全
+29. ~~**Live stdio e2e 测试**~~ ✅（v0.2.0）— `e2e_stdio.py`（mcp SDK，24 tools + 干净 stdout + tabular 完整往返）
 
-**交付物（部分）：** envelope ✅，资源限制 ✅，stdout 污染修复 ✅。
+**交付物：** envelope ✅，资源限制 ✅，stdout 污染修复（线程安全）✅，取消竞争 ✅，LRU 缓存 ✅，任务保留 ✅，线程安全 stdout ✅，live e2e harness ✅。48 tests passed on `:full`，46+2 on `:latest`。Live stdio MCP e2e PASSED。
 
 ## 设计决策记录
 
@@ -232,7 +237,9 @@ D:\claudecode\sy-automl-mcp\
 - **统一 envelope 设计：** 所有工具返回 `{success: bool, data: Any, error: str | None}` 格式，通过 `serialization/envelope.py` 实现。
 - **7 个 HIGH bug 修复：** 见 Phase 2 详述。
 - **3 个 MEDIUM 延期：** 软取消状态竞争（需 per-task lock）、预测器缓存无上限（需 LRU）、TaskStore 无淘汰（需 TTL）。记录为技术债务，Phase 3 处理。
-- **4 个技术债务项：** 上述 3 个 MEDIUM + stdout 重定向非线程安全（`max_workers > 1` 时需要 per-worker 捕获）。
+- **4 个技术债务项：** 上述 3 个 MEDIUM + stdout 重定向非线程安全（`max_workers > 1` 时需要 per-worker 捕获）。**全部已在 v0.2.0 解决。**
+- **v0.2.0 决策：** per-task `_state_lock` + 终态粘性解决取消竞争；`_ModelLRUCache`（OrderedDict）解决预测器缓存无上限；`sweep()` + TTL/count 解决任务无淘汰；`_ThreadLocalOutputProxy` 解决 stdout 线程安全；registry 锁升级为 `RLock` 解决 sweep 重入死锁。
+- **良性 LRU 重复加载竞争：** `_load_model` 非原子检查-然后-设置在 `max_workers > 1` 下可能导致同一模型被重复加载（冗余工作，无崩溃）。记录为未来加固项，不阻塞 v0.2.0。
 - **pytest 不入生产镜像：** 减小镜像体积，测试时运行时安装。
 - **freq 参数位置：** 从 `fit()` 移至 `TimeSeriesPredictor` 构造函数，与 AutoGluon 1.5.0 API 对齐。
 - **stdout 两层防御：** `_suppress_output()` 上下文管理器 + 后台 worker stdout/stderr 重定向到任务日志文件 + `verbosity=0`。已验证有效，但非线程安全。
@@ -254,9 +261,9 @@ D:\claudecode\sy-automl-mcp\
 | Windows 原生不支持 AutoGluon 多模态 | High | Docker 容器化，README 首段警告 |
 | `fit()` 运行数小时，无法硬中断 | High | 软取消 + 强制 `time_limit` 默认值 |
 | AutoGluon + torch 安装体积大（数 GB） | Medium | 分 tier 安装，Docker 隔离 |
-| **stdout 污染 MCP 协议** | High（已修复） | 两层防御：`_suppress_output()` + 后台 worker stdout 重定向 + `verbosity=0`。已验证 stdio 无泄漏。线程安全限制见技术债务 |
+| **stdout 污染 MCP 协议** | High（已修复） | 线程本地代理（`_ThreadLocalOutputProxy`）+ 两层防御（`_suppress_output()` + 后台 worker 重定向 + `verbosity=0`）。已验证 stdio 无泄漏。v0.2.0 起并发 worker 也安全 |
 | DataFrame 序列化失败（NaN/Timestamp/np） | Medium | `serialization/dataframe.py` 统一降维 |
-| 并发训练耗尽资源 | Medium | `max_workers=1` 默认，LRU 缓存上限（待实现） |
+| 并发训练耗尽资源 | Medium | `max_workers=1` 默认，LRU 缓存上限（v0.2.0 已实现 `MCP_MODEL_CACHE_MAX`） |
 | 路径越界 | Medium | `config.validate_id()` 拒绝非法字符 |
 | streamable-http 无认证 | Medium | 文档标注仅可信网络 |
 

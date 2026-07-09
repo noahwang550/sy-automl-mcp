@@ -1,16 +1,18 @@
 # PROGRESS.md — sy-automl-mcp 开发进度
 
-> 最后更新：2026-07-09
+> 最后更新：2026-07-09（v0.2.0）
 
 ## 当前状态
 
-**Phase 1 和 Phase 2 均完成并验证。Phase 3 部分完成。无验证缺口。**
+**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.2.0 已发布。**
 
-- `:latest` 镜像（tabular）：31 passed, 2 skipped（TS/MM skip 符合预期，它们在 `:full` 中）
-- `:full` 镜像（tabular + timeseries + multimodal）：**33 passed, 0 skipped, 0 failed**（~2 min）
+- `:latest` 镜像（tabular）：**46 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）
+- `:full` 镜像（tabular + timeseries + multimodal）：**48 passed, 0 skipped, 0 failed**（~2.5 min）
 - 所有 24 个 MCP 工具在真实 AutoGluon 1.5.0 上验证通过
-- stdout 污染已修复（两层防御，已验证 stdio 无泄漏）
+- stdout 污染已修复（线程本地代理 + 两层防御，已验证 stdio 无泄漏，并发 worker 安全）
 - 10 项 `:full` 检查清单全部 PASS/FIXED
+- Phase 3 四项技术债务全部解决（取消竞争、LRU 缓存、任务保留、线程安全 stdout）
+- Live stdio MCP e2e 在 `:full` 中 **PASSED**（24 tools + 干净 stdout）
 
 ## Phase 1 — Tabular + stdio + 后台任务 ✅
 
@@ -24,7 +26,7 @@
 
 **在 `sy-automl-mcp:full` 镜像中对真实 AutoGluon 1.5.0 验证通过。**
 
-- 完整测试套件：33 passed, 0 skipped, 0 failed（~2 min）
+- 完整测试套件：33 passed, 0 skipped, 0 failed（~2 min）— Phase 2 验证时计数；v0.2.0 已提升至 48 passed。
 - 定向运行也全部通过：test_timeseries.py (1), test_multimodal.py (1), test_model_management.py (6)
 - 代码审查结果：0 CRITICAL, 7 HIGH（全部修复）, 3 MEDIUM（延期）, 2 LOW（记录）
 
@@ -60,37 +62,46 @@
 9. ✅ Multimodal `evaluate(metrics=list)` 接受
 10. ✅ 未知 kwargs 模式 — `verbosity=0` 从不支持的 API 中移除
 
-## Phase 3 — 加固 🔶 部分
+## Phase 3 — 加固 ✅ 完成
 
 - ✅ 统一 envelope（`serialization/envelope.py`）
 - ✅ 资源限制（`config.py`）
 - ✅ GHCR publish workflow（`.github/workflows/docker.yml`，`v*` tag 触发）
-- ✅ Stdout 污染修复（两层防御）
-- ❌ 进度解析增强
-- ❌ CI lint pipeline
-- ❌ 80% 测试覆盖率
+- ✅ Stdout 污染修复（线程本地代理 + 两层防御）
+- ✅ **取消竞争修复**（v0.2.0）— per-task `_state_lock` + 终态粘性（SUCCESS/FAILED/CANCELLED）；终态后取消返回 `already_terminal`
+- ✅ **LRU 预测器缓存**（v0.2.0）— `_ModelLRUCache`（OrderedDict），`MCP_MODEL_CACHE_MAX`（默认 4）
+- ✅ **任务保留策略**（v0.2.0）— `sweep()` 淘汰终态任务（`MCP_TASK_RETENTION_SECONDS`、`MCP_TASK_MAX_RETAINED`），永不淘汰运行中/等待中任务
+- ✅ **线程安全 stdout 重定向**（v0.2.0）— `_ThreadLocalOutputProxy` + `set_thread_output_target()` / `reset_thread_output_target()`；`max_workers > 1` 安全
+- ❌ 进度解析增强（可选）
+- ❌ CI lint pipeline（可选）
+- ❌ 80% 测试覆盖率（可选）
 
-## 技术债务（Phase 3 待处理）
+## v0.2.0 额外修复（审查/验证期间发现）
 
-1. **软取消状态竞争** — `tasks/manager.py` + `registry.py` 缺少 per-task 锁
-2. **预测器缓存无上限** — `tools/model_management.py` 的 `load_model` 缓存无 LRU
-3. **TaskStore 无淘汰** — 已完成任务记录无 TTL/保留策略
-4. **stdout 重定向非线程安全** — 全局 `sys.stdout`/`sys.stderr` 重定向在 `max_workers > 1` 时互相干扰，需 per-worker 捕获方案（per-thread `io.StringIO` 或 logging-based）
+- `tasks/registry.py`：`_lock` 从 `threading.Lock()` 升级为 `threading.RLock()`（`sweep()` 重入 store 操作，非重入锁死锁）
+- `tasks/manager.py`：CANCELLED-before-execution 分支现在也设置 `finished_at`（终态任务必须有完成时间戳）
+- `tools/_common.py`：代理新增显式 `__iter__`/`__next__`（特殊方法在 type 上查找，而非通过 `__getattr__`）
+- `e2e_stdio.py`：仓库根目录新增实时 stdio MCP 往返测试工具（通过 mcp SDK，断言 24 工具 + 干净 stdout）
+- 新增 15 个测试：`tests/test_tasks.py` (+8)、`tests/test_model_management.py` (+3)、`tests/test_stdout_threading.py`（新文件，+4）
+
+## 已知良性限制
+
+- **LRU 重复加载竞争：** `_load_model` 使用非原子检查-然后-设置，在 `max_workers > 1` 下两个并发调用可能都加载同一个未缓存模型（冗余工作，无崩溃）。在默认单 worker 配置下为良性。记录为未来加固项。
 
 ## Git 状态
 
-- `git init` 完成，文件已 staged
-- **0 commits**（master 分支，无 commit 历史）
-- Remote `git@github.com:noahwang550/sy-automl-mcp.git` 尚未配置
+- `6134717` feat: AutoGluon MCP server — tabular/timeseries/multimodal tools, Docker-first, background task manager, stdout-pollution guard, 33 tests passing（初始 commit）
+- `v0.2.0` tag 已打并推送
+- Remote `origin` = `https://github.com/noahwang550/sy-automl-mcp.git`（HTTPS + GCM）
+- GHCR publish workflow 在 `v*` tag 时触发
 
 ## 下一步
 
-**无验证缺口。** 剩余工作：
-1. Commit 所有代码 + 文档
-2. 配置 remote，push 到 GitHub
-3. Tag `v0.1.0`（触发 GHCR publish）
-4. 处理 Phase 3 技术债务（4 项）
-5. （可选）CI lint pipeline, 80% 覆盖率, 进度解析增强
+**无验证缺口。** 剩余可选工作：
+1. （可选）CI lint pipeline
+2. （可选）80% 测试覆盖率
+3. （可选）进度解析增强（实时训练日志 tailing）
+4. （可选）LRU 重复加载竞争的原子化加固（仅在 `max_workers > 1` 成为常见场景时）
 
 ## 环境备忘
 

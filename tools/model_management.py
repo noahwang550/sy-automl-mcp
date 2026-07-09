@@ -1,9 +1,12 @@
 """Model management tools: list, load, delete trained models."""
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from typing import Any
 
 from config import (
+    MCP_MODEL_CACHE_MAX,
     directory_size_bytes,
     list_registry_models,
     model_path,
@@ -13,8 +16,44 @@ from config import (
 
 from ._common import envelope_call
 
+
+class _ModelLRUCache:
+    """Thread-safe LRU cache for loaded predictor objects."""
+
+    def __init__(self, max_size: int = MCP_MODEL_CACHE_MAX) -> None:
+        self._max_size = max_size
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, model_id: str) -> Any | None:
+        with self._lock:
+            if model_id not in self._cache:
+                return None
+            self._cache.move_to_end(model_id)
+            return self._cache[model_id]
+
+    def set(self, model_id: str, predictor: Any) -> None:
+        with self._lock:
+            self._cache[model_id] = predictor
+            self._cache.move_to_end(model_id)
+            while len(self._cache) > self._max_size:
+                self._cache.popitem(last=False)
+
+    def pop(self, model_id: str) -> Any | None:
+        with self._lock:
+            return self._cache.pop(model_id, None)
+
+    def __contains__(self, model_id: str) -> bool:
+        with self._lock:
+            return model_id in self._cache
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+
 # Simple in-memory cache for loaded predictors. Keys are model_ids.
-_model_cache: dict[str, Any] = {}
+_model_cache: _ModelLRUCache = _ModelLRUCache()
 
 
 def _registry_entry(model_id: str) -> dict | None:
@@ -92,8 +131,8 @@ def _load_model(model_id: str) -> dict[str, Any]:
     entry = _registry_entry(model_id)
     if entry is None:
         raise FileNotFoundError(f"Model not found in registry: {model_id}")
-    if model_id not in _model_cache:
-        _model_cache[model_id] = _load_predictor_obj(entry)
+    if _model_cache.get(model_id) is None:
+        _model_cache.set(model_id, _load_predictor_obj(entry))
     return {
         "model_id": model_id,
         "status": "loaded",
@@ -121,7 +160,7 @@ def _delete_model(model_id: str, confirm: bool) -> dict[str, Any]:
 
         shutil.rmtree(path)
     remove_model(model_id)
-    _model_cache.pop(model_id, None)
+    _model_cache.pop(model_id)
     return {"deleted": True, "model_id": model_id, "freed_mb": round(freed, 2)}
 
 

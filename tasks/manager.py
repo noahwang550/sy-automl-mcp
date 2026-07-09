@@ -16,17 +16,18 @@ Design notes:
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any
 
 from config import MCP_MAX_WORKERS, ensure_dirs, log_path
+from tools._common import reset_thread_output_target, set_thread_output_target
 
-from .registry import FAILED, SUCCESS, Task, TaskStore, _TERMINAL
+from .registry import _TERMINAL, CANCELLED, CANCELLING, FAILED, RUNNING, SUCCESS, Task, TaskStore
 
 __all__ = ["Task", "TaskManager", "get_task_manager"]
 
@@ -82,47 +83,68 @@ class TaskManager:
                 except OSError:
                     pass
 
-        with self._lock:
-            if task.is_cancelled():
-                task.status = "cancelled"
+        with task._state_lock:
+            if task.is_cancelled() or task.status == CANCELLING:
+                task.status = CANCELLED
                 task.finished_at = time.time()
+                _log(f"START {task.type} params={task.params}")
+                _log("CANCELLED before execution")
+                if logf:
+                    try:
+                        logf.close()
+                    except OSError:
+                        pass
                 return
-            task.status = "running"
+            task.status = RUNNING
             task.started_at = time.time()
         _log(f"START {task.type} params={task.params}")
 
         try:
             if task.is_cancelled():
-                task.status = "cancelled"
-                _log("CANCELLED before execution")
+                with task._state_lock:
+                    if task.status not in _TERMINAL:
+                        task.status = CANCELLED
+                        task.finished_at = time.time()
+                        _log("CANCELLED before execution")
                 return
             # Redirect any stdout/stderr produced by AutoGluon to the task log
             # so the stdio protocol stays clean while preserving diagnostics.
             log_target = logf if logf is not None else open(os.devnull, "w")
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = log_target
-            sys.stderr = log_target
+            set_thread_output_target(log_target)
             try:
                 summary = func(task)
             finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+                reset_thread_output_target()
                 if logf is None:
                     log_target.close()
-            if task.is_cancelled():
-                task.status = "cancelled"
-                _log("CANCELLED during execution")
-            else:
-                task.result_summary = summary or {}
-                task.status = SUCCESS
-                _log(f"SUCCESS summary={task.result_summary}")
+            with task._state_lock:
+                if task.status in _TERMINAL:
+                    # Sticky terminal state — do not overwrite.
+                    pass
+                elif task.is_cancelled():
+                    task.status = CANCELLED
+                    task.finished_at = time.time()
+                    _log("CANCELLED during execution")
+                else:
+                    task.result_summary = summary or {}
+                    task.status = SUCCESS
+                    task.finished_at = time.time()
+                    _log(f"SUCCESS summary={task.result_summary}")
         except Exception as exc:  # capture everything; MCP must not crash
-            task.error = f"{type(exc).__name__}: {exc}"
-            task.status = FAILED
-            _log(f"FAILED {task.error}\n{traceback.format_exc()}")
+            with task._state_lock:
+                if task.status in _TERMINAL:
+                    # Sticky terminal state — preserve it.
+                    pass
+                elif task.is_cancelled():
+                    task.status = CANCELLED
+                    task.finished_at = time.time()
+                    _log(f"CANCELLED with exception {exc}")
+                else:
+                    task.error = f"{type(exc).__name__}: {exc}"
+                    task.status = FAILED
+                    task.finished_at = time.time()
+                    _log(f"FAILED {task.error}\n{traceback.format_exc()}")
         finally:
-            task.finished_at = time.time()
             if logf:
                 try:
                     logf.close()
@@ -147,15 +169,20 @@ class TaskManager:
     def cancel(self, task_id: str) -> dict[str, Any]:
         task = self.store.require(task_id)
         ok = task.request_cancel()
+        already_terminal = task.status in _TERMINAL
+        note = (
+            "Soft cancel requested. AutoGluon cannot be hard-killed; the "
+            "job will stop at the next time_limit boundary. Always set "
+            "time_limit on training jobs."
+        )
+        if not ok:
+            note = f"Task is already in terminal state ({task.status}); no action taken."
         return {
             "task_id": task_id,
             "status": task.status,
             "cancellation_requested": ok,
-            "note": (
-                "Soft cancel requested. AutoGluon cannot be hard-killed; the "
-                "job will stop at the next time_limit boundary. Always set "
-                "time_limit on training jobs."
-            ),
+            "already_terminal": already_terminal,
+            "note": note,
         }
 
     def list(self) -> list[dict[str, Any]]:

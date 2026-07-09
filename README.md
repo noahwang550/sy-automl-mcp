@@ -1,20 +1,47 @@
 # sy-automl-mcp
 
+> **v0.2.0** — Phase 1 + Phase 2 + Phase 3 all complete. 48 tests pass on `:full`, 46+2 skip on `:latest`. Live stdio MCP e2e verified.
+
 将 [AutoGluon](https://github.com/autogluon/autogluon) 的 AutoML 能力封装为 **MCP (Model Context Protocol) 服务**，让 AI 助手（如 Claude Code）通过标准 MCP 工具调用完成数据加载、模型训练、预测、评估、模型管理全流程。
 
 > **运行环境：Docker 优先。** AutoGluon 官方仅支持 Linux/macOS，原生 Windows 下多模态/torch 依赖不稳定。本项目通过 Linux 容器运行 MCP server，宿主为 Windows 时使用 Docker Desktop 即可，无需 WSL2 直装。
+
+## What's New in v0.2.0
+
+Phase 3 tech-debt — 4 hardening items resolved, all verified against real AutoGluon in `:full`:
+
+1. **Per-task cancel race fixed** — `tasks/registry.py` + `tasks/manager.py` now use per-task `_state_lock` with sticky terminal states (SUCCESS/FAILED/CANCELLED). A cancel that arrives after completion returns `already_terminal` instead of overwriting the result.
+2. **LRU model cache** — `tools/model_management.py` replaced its unbounded predictor dict with a thread-safe `_ModelLRUCache` (OrderedDict + move-to-end + popitem(last=False)). Cap is configurable via `MCP_MODEL_CACHE_MAX` (default `4`).
+3. **Task retention** — `tasks/registry.py` runs `sweep()` on add/get/list/snapshot/require, evicting terminal tasks older than `MCP_TASK_RETENTION_SECONDS` (default `86400`) or over cap `MCP_TASK_MAX_RETAINED` (default `100`). Running/pending tasks are never evicted; evicted-id lookup raises a clear "Task expired or not found".
+4. **Thread-safe stdout redirect** — `tools/_common.py` installs a process-wide `_ThreadLocalOutputProxy` on `sys.stdout`/`sys.stderr`. `_suppress_output()` and the background worker set thread-local targets instead of swapping the global stream. Now safe to raise `MCP_MAX_WORKERS` above `1` for parallel training.
+
+Plus: registry lock upgraded to `RLock` (sweep() re-enters the store lock), CANCELLED-before-execution now sets `finished_at`, `_ThreadLocalOutputProxy` gained explicit `__iter__`/`__next__`, and a new live harness `e2e_stdio.py` drives a real stdio MCP round-trip via the `mcp` SDK.
 
 ## 当前状态
 
 | 阶段 | 状态 | 说明 |
 |------|------|------|
-| Phase 1 — Tabular + stdio + 后台任务 | ✅ 已验证 | 31 测试通过，端到端 stdio 流程 `load_dataset → train_tabular → get_task_status → predict_tabular` 经 e2e-runner 确认 |
-| Phase 2 — TimeSeries / Multimodal / 模型管理 | ✅ 已验证 | 在 `:full` 镜像中对真实 AutoGluon 验证通过；33 测试全部通过（0 skip），10 项检查清单全部 PASS/FIXED |
-| Phase 3 — 加固（错误信封、资源限制、CI、覆盖率） | 🔶 部分完成 | 统一 envelope ✅，资源限制 ✅；进度解析 ❌，CI lint ❌，80% 覆盖率 ❌ |
+| Phase 1 — Tabular + stdio + 后台任务 | ✅ 已验证 | 端到端 stdio 流程 `load_dataset → train_tabular → get_task_status → predict_tabular` 经 e2e-runner 确认 |
+| Phase 2 — TimeSeries / Multimodal / 模型管理 | ✅ 已验证 | 在 `:full` 镜像中对真实 AutoGluon 验证通过；10 项检查清单全部 PASS/FIXED |
+| Phase 3 — 加固（错误信封、资源限制、LRU、保留策略、线程安全、CI） | ✅ 完成 | envelope ✅，资源限制 ✅，stdout 污染修复 ✅，线程安全 ✅，LRU 缓存 ✅，任务保留 ✅，取消竞争 ✅ |
 
-**关键事实：** 镜像 `sy-automl-mcp:latest`（tabular tier，autogluon.tabular 1.5.0 + pandas 2.3.3）和 `sy-automl-mcp:full`（+ timeseries + multimodal）均已构建并通过全部测试。MCP server stdio 启动正常，`tools/list` 返回 24 个工具。stdout 污染已通过两层防御（`verbosity=0` + stdout/stderr 重定向）解决。Git 已 init 但**尚无 commit**。
+**测试计数（v0.2.0）：** `:latest` **46 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）；`:full` **48 passed, 0 skipped, 0 failed**（~2.5 min）。Live stdio MCP e2e：**PASSED**（24 个工具 + 干净 stdout）。
+
+**关键事实：** 镜像 `sy-automl-mcp:latest`（tabular tier，autogluon.tabular 1.5.0 + pandas 2.3.3）和 `sy-automl-mcp:full`（+ timeseries + multimodal）均已构建并通过全部测试。MCP server stdio 启动正常，`tools/list` 返回 24 个工具。stdout 污染已通过线程本地代理 + 两层防御（`verbosity=0` + stdout/stderr 重定向）解决，`max_workers > 1` 安全。
 
 ## 快速开始
+
+### 拉取预构建镜像（推荐）
+
+```bash
+# Tabular tier（默认，CPU 即可）
+docker run -i --rm -v "$PWD/artifacts:/app/artifacts" ghcr.io/noahwang550/sy-automl-mcp:tabular
+
+# Full tier（+ timeseries + multimodal，建议 GPU）
+docker run --gpus all -i --rm -v "$PWD/artifacts:/app/artifacts" ghcr.io/noahwang550/sy-automl-mcp:full
+```
+
+> `v*` tag push 会自动触发 GHCR publish workflow（`.github/workflows/docker.yml`）。标签包括 `:latest`、`:tabular`、`:full`、`:v0.2.0`。
 
 ### 构建
 
@@ -151,27 +178,33 @@ docker compose run --rm app pytest
 
 ## Stdout 污染防护
 
-AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，可能破坏 MCP stdio JSON-RPC 流。本项目采用**两层防御**：
+AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，可能破坏 MCP stdio JSON-RPC 流。本项目采用**线程本地代理 + 两层防御**：
 
-1. **`tools/_common.py`** — `_suppress_output()` 上下文管理器在每次内联 `envelope_call` 期间将 `sys.stdout`/`sys.stderr` 重定向到 `os.devnull`。
-2. **`tasks/manager.py`** — 后台 worker 在 `func(task)` 执行期间将 `sys.stdout`/`sys.stderr` 重定向到任务日志文件。
+1. **`tools/_common.py`** — 在 import 时一次性将 `sys.stdout`/`sys.stderr` 替换为进程级的 `_ThreadLocalOutputProxy`。`_suppress_output()` 上下文管理器将**当前线程**的目标设为 `os.devnull`，仅影响调用线程。
+2. **`tasks/manager.py`** — 后台 worker 通过 `set_thread_output_target(task_log_fh)` 将**该 worker 线程**的输出重定向到任务日志文件；执行结束后调用 `reset_thread_output_target()`。其他线程不受影响。
 3. 此外，支持 `verbosity` 参数的 AutoGluon 构造函数/方法均传入 `verbosity=0`。
 
-已验证：`:full` 镜像的 stdio MCP 端到端测试（initialize → load_dataset → train_tabular → poll → predict_tabular）stdout 上仅有合法 JSON-RPC 帧，无 AutoGluon 泄漏。
+已验证：`:full` 镜像的 stdio MCP 端到端测试（initialize → load_dataset → train_tabular → poll → predict_tabular）stdout 上仅有合法 JSON-RPC 帧，无 AutoGluon 泄漏，包括在并发 worker 线程下。
 
-> **线程安全限制：** 全局 `sys.stdout`/`sys.stderr` 重定向**不是线程安全的**。默认 `MCP_MAX_WORKERS=1`（串行训练）和顺序 stdio 请求处理下安全，但若 `max_workers > 1` 则需要 per-worker 重定向方案（如 per-thread `io.StringIO` 或基于 logging 的捕获）。
+> **线程安全：** stdout/stderr 重定向现在是**线程安全的**（线程本地目标，代理在安装后只读）。可安全提高 `MCP_MAX_WORKERS` 以并行训练。
 
 ## 限制
 
 - 训练 `fit()` 可能运行很久；`cancel_task` 为**软取消**（无法硬杀线程），实际中断依赖 `time_limit`，请始终为训练设置合理的 `time_limit`。
 - streamable-http 模式当前**无认证**，仅限可信网络。
 - Windows 原生 Python 运行不在支持范围。
-- 全局 stdout/stderr 重定向不是线程安全的（见上方说明），`max_workers > 1` 时需要额外改造。
-- 任务管理器为软取消，存在状态竞争（见技术债务）；预测器缓存无上限；已完成任务无 TTL 淘汰。
+- **良性的 LRU 重复加载竞争：** `tools/model_management.py` 中 `_load_model` 使用非原子性的检查-然后-设置，在 `max_workers > 1` 下两个并发调用可能同时加载同一个未缓存的模型（冗余工作，无崩溃，无正确性问题 —— 第二次加载简单覆盖第一次的条目）。在默认单 worker 配置下为良性。记录为未来加固项。
+- 进度解析（实时训练日志 tailing）未实现 —— 通过 `get_task_status` 轮询 `log_tail`。
+- CI lint pipeline 与 80% 测试覆盖率目标尚未到位（可选）。
 
-## 技术债务（已知，已记录）
+## 环境变量
 
-1. **软取消状态竞争** — `tasks/manager.py` + `registry.py` 缺少 per-task 锁，cancel 与 status 更新存在竞争窗口
-2. **预测器缓存无上限** — `tools/model_management.py` 中 `load_model` 缓存无 LRU 限制，长期运行可能耗尽内存
-3. **已完成任务无淘汰** — TaskStore 不淘汰已完成任务记录，需增加 TTL/保留策略
-4. **stdout 重定向非线程安全** — 全局 `sys.stdout`/`sys.stderr` 重定向在 `max_workers > 1` 时会互相干扰，需要 per-worker 捕获方案
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `MCP_TRANSPORT` | `stdio` | `stdio` 或 `http`（streamable-http） |
+| `MCP_PORT` | `8000` | streamable-http 模式的监听端口 |
+| `MCP_MAX_WORKERS` | `1` | 后台任务线程池大小（v0.2.0 起可安全提高） |
+| `MCP_MODEL_CACHE_MAX` | `4` | 内存中预测器 LRU 缓存上限 |
+| `MCP_TASK_RETENTION_SECONDS` | `86400` | 终态任务记录保留时长（秒） |
+| `MCP_TASK_MAX_RETAINED` | `100` | 终态任务最大保留数量 |
+| `MAX_DATASET_ROWS` / `MAX_DATASET_MB` / `MAX_DATASET_COLUMNS` | — | 数据集资源限制 |

@@ -1,10 +1,6 @@
 """Tests for model management tools (no AutoGluon required)."""
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 import config
 from tools.model_management import delete_model, list_models, model_info
 
@@ -96,3 +92,86 @@ def test_model_info_not_found(isolated_artifacts):
     res = model_info("no-such-model")
     assert res["success"] is False
     assert "not found" in res["error"].lower()
+
+
+# ---------------------------------------------------------------------------
+# LRU cache behavior (Item 2)
+# ---------------------------------------------------------------------------
+
+
+def _register_model(model_id: str, model_type: str = "tabular") -> None:
+    config.register_model(
+        {
+            "model_id": model_id,
+            "type": model_type,
+            "path": f"/tmp/{model_id}",
+            "target": "y",
+            "problem_type": "auto",
+            "created_at": 1.0,
+            "task_id": "t1",
+            "size_mb": 0.1,
+        }
+    )
+
+
+class _FakePredictor:  # noqa: D101
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+
+
+def test_model_cache_lru_eviction(isolated_artifacts, monkeypatch):
+    import tools.model_management as mm
+
+    _register_model("m1")
+    _register_model("m2")
+    _register_model("m3")
+    cache = mm._ModelLRUCache(max_size=2)
+    monkeypatch.setattr(mm, "_model_cache", cache)
+    monkeypatch.setattr(mm, "_load_predictor_obj", lambda entry: _FakePredictor(entry["model_id"]))
+
+    mm.load_model("m1")
+    mm.load_model("m2")
+    mm.load_model("m3")  # Should evict m1
+
+    assert len(cache) == 2
+    assert "m1" not in cache
+    assert "m2" in cache
+    assert "m3" in cache
+
+
+def test_model_cache_access_refreshes_position(isolated_artifacts, monkeypatch):
+    import tools.model_management as mm
+
+    _register_model("m1")
+    _register_model("m2")
+    _register_model("m3")
+    cache = mm._ModelLRUCache(max_size=2)
+    monkeypatch.setattr(mm, "_model_cache", cache)
+    monkeypatch.setattr(mm, "_load_predictor_obj", lambda entry: _FakePredictor(entry["model_id"]))
+
+    mm.load_model("m1")
+    mm.load_model("m2")
+    mm.load_model("m1")  # Refresh m1
+    mm.load_model("m3")  # Should evict m2, not m1
+
+    assert "m1" in cache
+    assert "m3" in cache
+    assert "m2" not in cache
+
+
+def test_model_cache_respects_max_size(isolated_artifacts, monkeypatch):
+    import tools.model_management as mm
+
+    _register_model("m1")
+    _register_model("m2")
+    _register_model("m3")
+    cache = mm._ModelLRUCache(max_size=1)
+    monkeypatch.setattr(mm, "_model_cache", cache)
+    monkeypatch.setattr(mm, "_load_predictor_obj", lambda entry: _FakePredictor(entry["model_id"]))
+
+    mm.load_model("m1")
+    mm.load_model("m2")
+
+    assert len(cache) == 1
+    assert "m1" not in cache
+    assert "m2" in cache

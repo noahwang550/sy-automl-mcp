@@ -32,6 +32,9 @@ MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio").lower()
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 MCP_HOST = os.environ.get("MCP_HOST", "0.0.0.0")
 MCP_MAX_WORKERS = max(1, int(os.environ.get("MCP_MAX_WORKERS", "1")))
+MCP_MODEL_CACHE_MAX = max(1, int(os.environ.get("MCP_MODEL_CACHE_MAX", "4")))
+MCP_TASK_RETENTION_SECONDS = max(0, int(os.environ.get("MCP_TASK_RETENTION_SECONDS", "86400")))
+MCP_TASK_MAX_RETAINED = max(0, int(os.environ.get("MCP_TASK_MAX_RETAINED", "100")))
 
 # Rows above which predict/evaluate run as background tasks instead of inline.
 INLINE_ROW_THRESHOLD = int(os.environ.get("INLINE_ROW_THRESHOLD", "5000"))
