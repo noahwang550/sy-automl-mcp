@@ -1,8 +1,8 @@
 # sy-automl-mcp
 
-> **v0.3.0** — Phase 1 + Phase 2 + Phase 3 all complete. 106 tests pass on `:full`, 102+2 skip on `:latest`. Live stdio + http auth e2e verified. CI lint (`ruff check`) green. Streamable-http Bearer auth available.
+> **v0.4.0** — 标准 MCP server，任意 MCP 兼容客户端可用（不依赖 Claude Code）。 106 tests pass on `:full`, 102+2 skip on `:latest`. Live stdio + http auth e2e verified. CI lint (`ruff check`) green. Streamable-http Bearer auth available.
 
-将 [AutoGluon](https://github.com/autogluon/autogluon) 的 AutoML 能力封装为 **MCP (Model Context Protocol) 服务**，让 AI 助手（如 Claude Code）通过标准 MCP 工具调用完成数据加载、模型训练、预测、评估、模型管理全流程。
+将 [AutoGluon](https://github.com/autogluon/autogluon) 的 AutoML 能力封装为 **MCP (Model Context Protocol) 服务**，让任意 MCP 兼容客户端（Claude Code、Claude Desktop、Cursor、Cline 等）通过标准 MCP 工具调用完成数据加载、模型训练、预测、评估、模型管理全流程。
 
 > **运行环境：Docker 优先。** AutoGluon 官方仅支持 Linux/macOS，原生 Windows 下多模态/torch 依赖不稳定。本项目通过 Linux 容器运行 MCP server，宿主为 Windows 时使用 Docker Desktop 即可，无需 WSL2 直装。
 
@@ -109,6 +109,96 @@ claude mcp add autogluon -- docker run -i --rm \
   -v /absolute/path/to/sy-automl-mcp/artifacts:/app/artifacts \
   sy-automl-mcp
 ```
+
+## 接入任意 MCP 客户端（最终用户指南）
+
+> **不依赖 Claude Code。** 本服务是标准 MCP server（JSON-RPC over stdio / streamable-http），任何 MCP 兼容客户端都能连：Claude Code、Claude Desktop、Cursor、Cline、Continue、Zed、Goose、VS Code（MCP 扩展），以及自写的 `mcp` SDK 客户端。Claude Code 只是其中一种。下面以 `.mcp.json` 配置为例，其他客户端字段名类似。
+
+### 模式 A：本地 stdio（个人 / 敏感数据，无需认证）
+
+每个用户在自己机器上配置客户端，由客户端 spawn 一个本地容器：
+
+```json
+{
+  "mcpServers": {
+    "autogluon": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "/ABSOLUTE/PATH/artifacts:/app/artifacts",
+        "ghcr.io/noahwang550/sy-automl-mcp:full"
+      ]
+    }
+  }
+}
+```
+
+要点：
+- 首次会自动 `docker pull`。仅表格任务用 `:latest` / `:tabular`（更小、CPU 即可）；需时序/多模态用 `:full`。
+- 有 GPU 加 `"--gpus", "all"` 到 `args`。
+- **用绝对路径**挂载 `artifacts/`（JSON 不做 shell 展开，`$PWD` 不生效）；Windows 用正斜杠如 `C:/Users/you/automl/artifacts`。
+- stdio 是私有进程管道，**无需认证**。
+- 或命令行注册：`claude mcp add autogluon -- docker run -i --rm -v /abs/path/artifacts:/app/artifacts ghcr.io/noahwang550/sy-automl-mcp:full`
+
+### 模式 B：远程 http 共享（多人 / 团队，需认证）
+
+**运维方起常驻服务**（设一个随机 token 并记下来分发）：
+
+```bash
+TOKEN=$(openssl rand -hex 32)
+docker run -d --name automl-mcp --restart unless-stopped \
+  -p 8000:8000 \
+  -e MCP_TRANSPORT=http -e MCP_HOST=0.0.0.0 -e MCP_API_TOKEN="$TOKEN" \
+  -v /ABSOLUTE/PATH/artifacts:/app/artifacts \
+  --gpus all \
+  ghcr.io/noahwang550/sy-automl-mcp:full
+```
+
+- 存活探针（免认证）：`curl http://host:8000/health` → `{"status":"ok"}`
+- MCP 端点路径：`/mcp`（URL 末尾带上）
+- **上公网务必套 TLS**（Nginx/Caddy 反代 + HTTPS，或放 VPN/内网后），否则 token 明文走线。
+
+**用户配置**（把 URL + token 发给用户填入自己客户端）：
+
+```json
+{
+  "mcpServers": {
+    "autogluon": {
+      "type": "http",
+      "url": "https://your-host/mcp",
+      "headers": { "Authorization": "Bearer 用户拿到的TOKEN" }
+    }
+  }
+}
+```
+
+token 错/缺 → 工具调用返回 `401 {"detail":"Unauthorized"}`。
+
+### 连上后的一次典型流程
+
+连上后用自然语言驱动，客户端会自动调用 24 个工具：
+
+```
+"加载这份购买意向数据并训练一个分类模型"
+  → load_dataset(inline CSV 或 URL)               → 行列/样本概要
+  → train_tabular(target=purchase, time_limit=300) → 立即返回 task_id
+  → get_task_status(task_id) 轮询                  → status + progress 字段
+       (progress: 已拟合模型数 / 最新验证分 / recent log)
+  → predict_tabular(新样本)                      → 返回预测
+  → 可选: evaluate_tabular / leaderboard_tabular / feature_importance_tabular
+```
+
+通用约束：
+- 训练是长任务：`train_*` 立即返回 `task_id`，需轮询 `get_task_status`；务必设 `time_limit`（软取消靠它）。
+- 模式 B 共用同一台服务器的 `artifacts/`，约定 `dataset_id` / `model_id` 命名避免撞车。
+
+### 选型
+
+| 场景 | 选 |
+|------|-----|
+| 个人 / 数据不外传 | A（stdio），无需认证 |
+| 多人 / 远程 / 公网共享 | B（http + `MCP_API_TOKEN` + TLS） |
 
 ## 安装 Tier
 
