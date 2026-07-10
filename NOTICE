@@ -1,0 +1,46 @@
+sy-automl-mcp
+Copyright 2026 The sy-automl-mcp authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+THIRD-PARTY NOTICES
+================================================================================
+
+This product includes or bundles the following third-party software. The full
+license texts and the complete per-package attribution list (name, version,
+license, URL) are in THIRD_PARTY_LICENSES.txt, generated from installed package
+metadata via scripts/gen_licenses.py.
+
+- AutoGluon (autogluon.tabular / autogluon.timeseries / autogluon.multimodal /
+  autogluon.core / autogluon.common / autogluon.features)
+  Copyright the AutoGluon contributors. Licensed under the Apache License 2.0.
+  https://github.com/autogluon/autogluon
+
+- Model Context Protocol Python SDK (mcp)
+  Copyright Anthropic, PBC. Licensed under the MIT License.
+  https://github.com/anthropics/mcp-python-sdk
+
+- PyTorch Lightning / Lightning (lightning, pytorch-lightning), CatBoost,
+  XGBoost, Hugging Face Transformers & Tokenizers, PyArrow, Accelerate
+  Licensed under the Apache License 2.0.
+
+- LightGBM — Licensed under the MIT License.
+
+- PyTorch (torch), pandas, NumPy, SciPy, scikit-learn, Starlette, Uvicorn
+  Licensed under the BSD 3-Clause License.
+
+The names "AutoGluon" and "Amazon Web Services" / "AWS" are trademarks of their
+respective owners. This project is not affiliated with, endorsed by, or
+sponsored by AWS or the AutoGluon project. "AutoGluon" is used here only in a
+descriptive (nominative) sense to identify the wrapped framework.

@@ -333,3 +333,20 @@ AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，
 | `MCP_TASK_MAX_RETAINED` | `100` | 终态任务最大保留数量 |
 | `MCP_API_TOKEN` | （未设置） | streamable-http Bearer token 认证；未设置/空 = 认证禁用（向后兼容） |
 | `MAX_DATASET_ROWS` / `MAX_DATASET_MB` / `MAX_DATASET_COLUMNS` | — | 数据集资源限制 |
+
+## License
+
+本项目自身代码以 **Apache License 2.0** 授权（见 `LICENSE`）。
+
+镜像再分发了 AutoGluon 等第三方组件，其归属与 license 全文见仓库根 `NOTICE` 与 `THIRD_PARTY_LICENSES.txt`（并由 `Dockerfile` 烤入镜像 `/app/`，满足各协议的"附带 license 文本 + 归属声明"要求）。`THIRD_PARTY_LICENSES.txt` 由 `scripts/gen_licenses.py` 从已装包元数据自动生成——依赖变更后重跑该脚本刷新。
+
+| 源头组件 | License |
+|----------|---------|
+| AutoGluon | Apache-2.0 |
+| Model Context Protocol SDK（`mcp`） | MIT |
+| PyTorch | BSD-3-Clause |
+| PyTorch Lightning / CatBoost / XGBoost / Transformers / PyArrow | Apache-2.0 |
+| LightGBM | MIT |
+| pandas / NumPy / SciPy / scikit-learn / Starlette / Uvicorn | BSD-3-Clause |
+
+全部为宽松协议，无 copyleft，可商用。**商标：** "AutoGluon" 为 AWS 相关方商标，本项目与其无关联/无背书，仅作描述性（指示性）使用。

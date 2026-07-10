@@ -56,7 +56,12 @@ COPY tools/ ./tools/
 COPY tasks/ ./tasks/
 COPY serialization/ ./serialization/
 
-# Runtime artifacts directory (overridable by volume mount).
+# License compliance: bundle the project license, NOTICE, and the full
+# third-party attribution list into the distributed image (Apache-2.0 / MIT /
+# BSD-3-Clause deps require license text + attribution in redistributions).
+COPY LICENSE NOTICE THIRD_PARTY_LICENSES.txt /app/
+COPY scripts/gen_licenses.py ./scripts/
+
 RUN mkdir -p /app/artifacts/datasets /app/artifacts/models /app/artifacts/predictions /app/artifacts/logs
 ENV ARTIFACTS_DIR=/app/artifacts
 

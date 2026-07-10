@@ -28,3 +28,6 @@ AutogluonModels/
 # Local env
 .env
 .env.local
+
+# Claude Code session state
+.claude/
