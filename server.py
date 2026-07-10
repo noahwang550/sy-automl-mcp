@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import logging
 
+import uvicorn
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
 
-from config import MCP_HOST, MCP_PORT, MCP_TRANSPORT, ensure_dirs
+from config import MCP_API_TOKEN, MCP_HOST, MCP_PORT, MCP_TRANSPORT, ensure_dirs
 from tools._common import safe_tool
+from tools.auth import BearerTokenMiddleware
 from tools.data import load_dataset, validate_dataset
 from tools.model_management import delete_model, list_models, load_model, model_info
 from tools.multimodal import evaluate_multimodal, predict_multimodal, train_multimodal
@@ -83,6 +86,24 @@ for _fn in (
     mcp.tool()(safe_tool(_fn))
 
 
+class _McpOrHealthApp:
+    """ASGI wrapper that serves a stateless /health probe before the MCP app."""
+
+    def __init__(self, mcp_app) -> None:
+        self.mcp_app = mcp_app
+        self._health = JSONResponse({"status": "ok"})
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] == "http"
+            and scope["method"] == "GET"
+            and scope["path"] == "/health"
+        ):
+            await self._health(scope, receive, send)
+            return
+        await self.mcp_app(scope, receive, send)
+
+
 def main() -> None:
     ensure_dirs()
     log.info("Starting sy-automl-mcp (transport=%s)", MCP_TRANSPORT)
@@ -91,7 +112,14 @@ def main() -> None:
     elif MCP_TRANSPORT in ("http", "streamable-http"):
         mcp.settings.host = MCP_HOST
         mcp.settings.port = MCP_PORT
-        mcp.run(transport="streamable-http")
+        mcp_app = mcp.streamable_http_app()
+        app: object = _McpOrHealthApp(mcp_app)
+        if MCP_API_TOKEN:
+            log.info("streamable-http auth enabled")
+            app = BearerTokenMiddleware(app, expected_token=MCP_API_TOKEN)
+        else:
+            log.info("streamable-http auth disabled")
+        uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")
     else:
         raise SystemExit(f"Unknown MCP_TRANSPORT={MCP_TRANSPORT!r} (use stdio|http)")
 

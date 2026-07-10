@@ -4,6 +4,12 @@ All artifact paths resolve under a single root (``ARTIFACTS_DIR``) which is
 bind-mounted into the container at ``/app/artifacts``. Tool code must never
 accept raw absolute paths from callers — it resolves user-supplied identifiers
 against this root and rejects traversal attempts.
+
+Environment variables consumed here:
+    - MCP_TRANSPORT, MCP_HOST, MCP_PORT
+    - MCP_MAX_WORKERS, MCP_MODEL_CACHE_MAX
+    - MCP_TASK_RETENTION_SECONDS, MCP_TASK_MAX_RETAINED
+    - MCP_API_TOKEN (optional; when set, streamable-http requires Bearer token)
 """
 from __future__ import annotations
 
@@ -35,6 +41,8 @@ MCP_MAX_WORKERS = max(1, int(os.environ.get("MCP_MAX_WORKERS", "1")))
 MCP_MODEL_CACHE_MAX = max(1, int(os.environ.get("MCP_MODEL_CACHE_MAX", "4")))
 MCP_TASK_RETENTION_SECONDS = max(0, int(os.environ.get("MCP_TASK_RETENTION_SECONDS", "86400")))
 MCP_TASK_MAX_RETAINED = max(0, int(os.environ.get("MCP_TASK_MAX_RETAINED", "100")))
+MCP_API_TOKEN_RAW = os.environ.get("MCP_API_TOKEN")
+MCP_API_TOKEN: str | None = MCP_API_TOKEN_RAW if MCP_API_TOKEN_RAW else None
 
 # Rows above which predict/evaluate run as background tasks instead of inline.
 INLINE_ROW_THRESHOLD = int(os.environ.get("INLINE_ROW_THRESHOLD", "5000"))

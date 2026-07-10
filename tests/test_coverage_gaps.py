@@ -7,9 +7,7 @@ AutoGluon, so they run on the tabular tier too.
 """
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -26,7 +24,7 @@ from tools.data import (
     read_dataset_df,
     read_inline_or_dataset,
 )
-from tools.model_management import _list_models, _load_predictor_obj, list_models, load_model
+from tools.model_management import _load_predictor_obj, list_models, load_model
 
 try:
     import numpy as np
@@ -138,7 +136,7 @@ def test_write_then_read_json_and_csv(tmp_path):
 
 
 def test_write_then_read_parquet(tmp_path):
-    pyarrow = pytest.importorskip("pyarrow")
+    pytest.importorskip("pyarrow")
     df = pd.DataFrame({"a": [1, 2], "b": ["x", "y"]})
     pp = tmp_path / "d.parquet"
     _write_df(df, pp, "parquet")

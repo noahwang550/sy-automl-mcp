@@ -1,10 +1,23 @@
 # sy-automl-mcp
 
-> **v0.3.0** — Phase 1 + Phase 2 + Phase 3 all complete. 88 tests pass on `:full` (90% coverage), 84+2 skip on `:latest`. Live stdio MCP e2e verified. CI lint (`ruff check`) green.
+> **v0.3.0** — Phase 1 + Phase 2 + Phase 3 all complete. 106 tests pass on `:full`, 102+2 skip on `:latest`. Live stdio + http auth e2e verified. CI lint (`ruff check`) green. Streamable-http Bearer auth available.
 
 将 [AutoGluon](https://github.com/autogluon/autogluon) 的 AutoML 能力封装为 **MCP (Model Context Protocol) 服务**，让 AI 助手（如 Claude Code）通过标准 MCP 工具调用完成数据加载、模型训练、预测、评估、模型管理全流程。
 
 > **运行环境：Docker 优先。** AutoGluon 官方仅支持 Linux/macOS，原生 Windows 下多模态/torch 依赖不稳定。本项目通过 Linux 容器运行 MCP server，宿主为 Windows 时使用 Docker Desktop 即可，无需 WSL2 直装。
+
+## What's New (Post-v0.3.0)
+
+### Streamable-HTTP Bearer Token Auth
+
+`MCP_API_TOKEN` gates the streamable-http transport. stdio is completely unaffected.
+
+- **Set the token:** `docker run -e MCP_API_TOKEN=your-secret-token -e MCP_TRANSPORT=http ...`
+- **Accepted headers:** `Authorization: Bearer <token>` (case-insensitive scheme), `X-API-Key: <token>`, or bare `<token>` in `Authorization`.
+- **Unset/empty = auth disabled** (backward-compatible, fine for trusted/local networks).
+- **Security:** timing-safe comparison (`secrets.compare_digest`), generic `401 {"detail":"Unauthorized"}` (no token echo, no missing-vs-wrong distinction), `GET /health` exempted as unauthed liveness probe.
+- **stdio needs no auth** — it is inherently private (single process, no network).
+- **Production guidance:** use a long random token (e.g. `openssl rand -hex 32`), never hardcode it in source, bind to trusted networks or place behind TLS/reverse-proxy for internet-facing deployments.
 
 ## What's New in v0.3.0
 
@@ -46,6 +59,8 @@ Post-v0.2.0 fixes from e2e-runner (AutoGluon 1.5.0 API-drift hunt) and code-revi
 | Phase 3 — 加固（错误信封、资源限制、LRU、保留策略、线程安全、CI） | ✅ 完成 | envelope ✅，资源限制 ✅，stdout 污染修复 ✅，线程安全 ✅，LRU 缓存 ✅，任务保留 ✅，取消竞争 ✅ |
 
 **测试计数（v0.3.0）：** `:latest` **84 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中；覆盖率 73% 总计但 91% 可测源码）；`:full` **88 passed, 0 skipped, 0 failed**（~3.3 min，覆盖率 **90%**）。Live stdio MCP e2e：**PASSED**（24 个工具 + 干净 stdout + `progress` 字段正常呈现）。`ruff check .` clean。
+
+**测试计数（auth feature, post-v0.3.0）：** `:latest` **102 passed, 2 skipped**；`:full` **106 passed, 0 skipped, 0 failed**（~3.5 min）。Live http auth e2e（12 cases）+ stdio e2e 均 **PASSED**。`ruff check .` clean。
 
 **关键事实：** 镜像 `sy-automl-mcp:latest`（tabular tier，autogluon.tabular 1.5.0 + pandas 2.3.3）和 `sy-automl-mcp:full`（+ timeseries + multimodal）均已构建并通过全部测试。MCP server stdio 启动正常，`tools/list` 返回 24 个工具。stdout 污染已通过线程本地代理 + 两层防御（`verbosity=0` + stdout/stderr 重定向）解决，`max_workers > 1` 安全。
 
@@ -211,7 +226,7 @@ AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，
 ## 限制
 
 - 训练 `fit()` 可能运行很久；`cancel_task` 为**软取消**（无法硬杀线程），实际中断依赖 `time_limit`，请始终为训练设置合理的 `time_limit`。
-- streamable-http 模式当前**无认证**，仅限可信网络。
+- streamable-http 模式可通过 `MCP_API_TOKEN` 实现 Bearer 认证；未设置时仍为无认证（仅限可信网络）。stdio 不受影响。
 - Windows 原生 Python 运行不在支持范围。
 
 > **安全说明（hardening round）：** 多模态工具的图像列路径已通过 `_resolve_image_path()` 限制在 `ARTIFACTS_DIR` 内（路径穿越缓解）。所有公开工具通过 `safe_tool` 装饰器保证统一信封返回（异常不泄漏）。任务日志不再包含完整 Python 回溯（仅异常消息）。LRU 缓存重复加载竞争已通过 `get_or_load()` 解决。
@@ -226,4 +241,5 @@ AutoGluon / PyTorch / Lightning 会向 stdout/stderr 输出进度条和横幅，
 | `MCP_MODEL_CACHE_MAX` | `4` | 内存中预测器 LRU 缓存上限 |
 | `MCP_TASK_RETENTION_SECONDS` | `86400` | 终态任务记录保留时长（秒） |
 | `MCP_TASK_MAX_RETAINED` | `100` | 终态任务最大保留数量 |
+| `MCP_API_TOKEN` | （未设置） | streamable-http Bearer token 认证；未设置/空 = 认证禁用（向后兼容） |
 | `MAX_DATASET_ROWS` / `MAX_DATASET_MB` / `MAX_DATASET_COLUMNS` | — | 数据集资源限制 |

@@ -1,21 +1,23 @@
 # PROGRESS.md — sy-automl-mcp 开发进度
 
-> 最后更新：2026-07-09（v0.3.0 — CI lint, progress parsing, 80% coverage）
+> 最后更新：2026-07-10（streamable-http Bearer token auth）
 
 ## 当前状态
 
-**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.3.0 已发布。Hardening round（2026-07-09）已完成。v0.3.0 engineering round（2026-07-09）已完成。**
+**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.3.0 已发布。Hardening round（2026-07-09）已完成。v0.3.0 engineering round（2026-07-09）已完成。Streamable-http Bearer auth（2026-07-10）已完成。**
 
-- `:latest` 镜像（tabular）：**84 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）。覆盖率：73% 总计但 91% 可测源码
-- `:full` 镜像（tabular + timeseries + multimodal）：**88 passed, 0 skipped, 0 failed**（~3.3 min）。覆盖率：**90%**（1089 stmts, 109 miss）。**80% 目标达成**
+- `:latest` 镜像（tabular）：**102 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）。`tests/test_auth.py` = 18 passed
+- `:full` 镜像（tabular + timeseries + multimodal）：**106 passed, 0 skipped, 0 failed**（~3.5 min）
 - 所有 24 个 MCP 工具在真实 AutoGluon 1.5.0 上验证通过
 - stdout 污染已修复（线程本地代理 + 两层防御，已验证 stdio 无泄漏，并发 worker 安全）
 - 10 项 `:full` 检查清单全部 PASS/FIXED
 - Phase 3 四项技术债务全部解决（取消竞争、LRU 缓存、任务保留、线程安全 stdout）
 - Hardening round 6 项修复全部完成（2 API 漂移 + 路径穿越 + 异常泄漏 + 回溯泄漏 + LRU 竞争）
 - v0.3.0: CI lint pipeline ✅, 进度解析 ✅, 80% 测试覆盖率 ✅
+- Streamable-http Bearer auth: ✅ `MCP_API_TOKEN` 环境变量, timing-safe compare, generic 401, `/health` 免认证 liveness probe, stdio 不受影响
 - `ruff check .` — **clean**
 - Live stdio MCP e2e 在 `:full` 中 **PASSED**（24 tools + 干净 stdout + `progress` 字段正常出现在 `get_task_status` 响应中）
+- Live http auth e2e (`scripts/http_auth_e2e.py`) — **PASSED**（12 cases：401 missing/wrong token, 24 tools with token, backward-compat, identical 401 body）
 
 ## Phase 1 — Tabular + stdio + 后台任务 ✅
 
@@ -90,7 +92,7 @@
 ## 已知限制
 
 - 训练 `fit()` 可能运行很久；`cancel_task` 为软取消，实际中断依赖 `time_limit`
-- streamable-http 模式当前无认证
+- streamable-http 模式可通过 `MCP_API_TOKEN` 实现 Bearer 认证；未设置时仍为无认证（仅限可信网络）。stdio 不受影响
 - Windows 原生 Python 不在支持范围
 
 ## Git 状态
@@ -146,10 +148,31 @@
 
 Live stdio MCP e2e 在重建的 `:full` 镜像上重新验证通过 — 24 工具列表 + 完整 tabular 往返 + 新 `progress` 字段正常出现在 `get_task_status` 响应中 + stdout 干净。
 
-## 下一步
+## Streamable-HTTP Auth — 2026-07-10（Bearer token, TDD→e2e→review chain）
+
+**测试计数：** `:latest` **102 passed, 2 skipped**；`:full` **106 passed, 0 skipped, 0 failed**（~3.5 min）。`ruff check .` clean。Live http auth e2e + stdio e2e 均 PASSED。
+
+### 实现
+
+1. `tools/auth.py`（新增）— `check_bearer_token(auth_header, expected) -> bool` 使用 `secrets.compare_digest`（constant-time）处理所有 header 路径（缺失、错误、正确）。`BearerTokenMiddleware`（Starlette `BaseHTTPMiddleware`）豁免 `GET /` 和 `GET /health`（严格 method+path 匹配）。返回通用 `401 {"detail":"Unauthorized"}` — 不回显 token，不区分缺失/错误。
+2. `config.py` — 解析 `MCP_API_TOKEN`（未设置/空 = 认证禁用，向后兼容）。
+3. `server.py` — 当 `MCP_TRANSPORT=http` 且 token 已设置时：构建 `mcp.streamable_http_app()`，添加 auth 中间件，通过 `uvicorn.run(app, host, port)` 提供服务。新增 `_McpOrHealthApp` ASGI 包装器，`GET /health` 返回 `200 {"status":"ok"}`（故意无认证的 liveness probe）。启动日志记录 "streamable-http auth enabled/disabled" — 绝不记录 token 值。stdio 路径 + 无 token http 路径不变。
+4. `tests/test_auth.py`（新增）— 18 个单元 + 中间件测试（check_bearer_token 分支、错误 X-API-Key 等）。
+5. `scripts/http_auth_e2e.py`（新增）— 实时 HTTP auth e2e 测试工具：启动真实 server，驱动真实 `mcp` SDK `streamable_http_client` + raw-HTTP 探测。12 个 case 全部通过（401 missing/wrong token, 24 tools with token, backward-compat, identical 401 body）。
+6. `tests/test_coverage_gaps.py` — 仅 lint 修复（移除未使用 import）。
+
+### Code review 结果
+
+- **0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW。**
+- 结论：**APPROVE。**
+- TDD 链中应用了 3 个 reviewer 修复：(1) 在 `test_auth.py` 中新增错误 `X-API-Key` 测试，(2) 提取 `_McpOrHealthApp` health wrapper 以提高可测试性，(3) 确认 `secrets.compare_digest` 在所有 header 分支上 constant-time。
+
+### 重新验证
+
+Live stdio MCP e2e 在重建的 `:full` 镜像上重新验证通过 — auth 变更**未影响** stdio（24 tools + tabular 往返 + stdout 干净）。Live http auth e2e — 12 cases 全部 PASSED。
 
 **无验证缺口。** 剩余可选工作：
-1. （可选）streamable-http 认证
+1. （可选）streamable-http TLS/反向代理配置文档
 
 ## 环境备忘
 
