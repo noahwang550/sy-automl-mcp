@@ -1,0 +1,36 @@
+services:
+  sy-automl-mcp:
+    image: sy-automl-mcp:tabular
+    build:
+      context: .
+    container_name: sy-automl-mcp
+    restart: unless-stopped
+
+    # Direct bind to host 9885 (no nginx in front; TLS not configured —
+    # rely on cloud security group to limit source IPs until nginx hardening
+    # is added with sudo).
+    ports:
+      - "0.0.0.0:9885:8000"
+
+    env_file:
+      - ./deploy/env
+
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./deploy/tokens.json:/etc/sy-automl-mcp/tokens.json:ro
+
+    mem_limit: 8g
+    cpus: 6
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "10"

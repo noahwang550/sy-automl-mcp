@@ -1,0 +1,22 @@
+# sy-automl-mcp production env (docker compose env_file)
+# Container-internal binding: app listens on 0.0.0.0:8000; compose maps to host 9885.
+MCP_TRANSPORT=http
+MCP_HOST=0.0.0.0
+MCP_PORT=8000
+
+# Multi-token auth (v0.5.0). tokens.json mounted read-only from deploy/.
+MCP_API_TOKENS_FILE=/etc/sy-automl-mcp/tokens.json
+MCP_AUDIT_LOG_DIR=/app/artifacts/logs/audit
+
+# Resource limits — host has 23G free, give container 8G.
+MCP_MAX_WORKERS=2
+MCP_MODEL_CACHE_MAX=2
+MCP_TASK_RETENTION_SECONDS=86400
+MAX_DATASET_MB=512
+
+# Browser upload page at /upload — escape hatch for agent platforms that
+# cannot pipe attachment bytes through the LLM. User opens
+# /upload?token=<bearer> in a browser, uploads the file, gets a dataset_id
+# to paste into the agent chat.
+MCP_UPLOAD_ENABLED=true
+MCP_UPLOAD_URL_BASE=http://47.99.174.228:9885

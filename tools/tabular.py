@@ -55,6 +55,25 @@ def _resolve_problem_type(problem_type: str | None) -> str | None:
 def _train_tabular_job(task: Task) -> dict[str, Any]:
     p = task.params
     df = read_dataset_df(p["dataset_id"])
+    target = p["target"]
+    if target not in df.columns:
+        raise ValueError(
+            f"Target column {target!r} not in dataset columns: {list(df.columns)}"
+        )
+    # Auto-drop rows with empty/NaN target — AutoGluon's fit() does not
+    # filter these, and empty labels crash training. Report the count so the
+    # agent can surface data-quality issues to the user.
+    rows_before = len(df)
+    non_empty = df[target].notna() & (df[target].astype(str).str.strip() != "")
+    rows_dropped_empty_target = rows_before - int(non_empty.sum())
+    if rows_dropped_empty_target:
+        df = df[non_empty]
+    if len(df) == 0:
+        raise ValueError(
+            f"All {rows_before} rows have empty/NaN target {target!r}; "
+            "nothing to train on. Check the target column name or clean the "
+            "dataset (e.g. drop rows where the target is blank)."
+        )
     TabularPredictor = _import_predictor()
     predictor = TabularPredictor(
         label=p["target"],
@@ -94,6 +113,8 @@ def _train_tabular_job(task: Task) -> dict[str, Any]:
         "best_model": best,
         "artifact_path": task.artifact_path,
         "leaderboard_top": to_jsonable(lb.head(5)) if lb is not None else [],
+        "rows_trained": len(df),
+        "rows_dropped_empty_target": rows_dropped_empty_target,
     }
 
 

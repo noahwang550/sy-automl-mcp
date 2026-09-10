@@ -5,7 +5,7 @@ drives the real JSON-RPC stdio transport through the official ``mcp`` SDK.  The
 script asserts that:
 
 * the server boots and initializes,
-* exactly 24 tools are listed,
+* exactly 28 tools are listed,
 * a tabular round-trip (load -> train -> poll -> predict) succeeds,
 * no AutoGluon/stdout pollution appears on the server's stdio stream.
 """
@@ -86,11 +86,11 @@ def _json(result: CallToolResult) -> dict:
 
 async def main() -> int:
     async with mcp_session() as session:
-        # 1. tools/list should report 24 tools
+        # 1. tools/list should report 28 tools
         tools_result = await session.list_tools()
         tool_names = [t.name for t in tools_result.tools]
         log.info("tools listed: %d", len(tool_names))
-        assert len(tool_names) == 24, f"expected 24 tools, got {len(tool_names)}"
+        assert len(tool_names) == 28, f"expected 28 tools, got {len(tool_names)}"
 
         # 2. load_dataset with inline CSV
         dataset_id = f"iris_e2e_{int(time.time())}"

@@ -15,10 +15,31 @@ import uvicorn
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 
-from config import MCP_API_TOKEN, MCP_HOST, MCP_PORT, MCP_TRANSPORT, ensure_dirs
+from config import (
+    MCP_API_TOKEN,
+    MCP_API_TOKENS_FILE,
+    MCP_HOST,
+    MCP_PORT,
+    MCP_TRANSPORT,
+    MCP_UPLOAD_ENABLED,
+    ensure_dirs,
+)
 from tools._common import safe_tool
 from tools.auth import BearerTokenMiddleware
-from tools.data import load_dataset, validate_dataset
+from tools.data import (
+    finalize_dataset,
+    load_dataset,
+    upload_dataset,
+    upload_dataset_chunk,
+    validate_dataset,
+)
+from tools.upload import (
+    check_upload_token,
+    get_upload_instructions,
+    handle_get as upload_get,
+    handle_post as upload_post,
+    unauthorized_response as upload_unauthorized,
+)
 from tools.model_management import delete_model, list_models, load_model, model_info
 from tools.multimodal import evaluate_multimodal, predict_multimodal, train_multimodal
 from tools.tabular import (
@@ -55,6 +76,10 @@ for _fn in (
     # data
     load_dataset,
     validate_dataset,
+    upload_dataset,
+    upload_dataset_chunk,
+    finalize_dataset,
+    get_upload_instructions,
     # tabular
     train_tabular,
     predict_tabular,
@@ -87,20 +112,41 @@ for _fn in (
 
 
 class _McpOrHealthApp:
-    """ASGI wrapper that serves a stateless /health probe before the MCP app."""
+    """ASGI wrapper that serves a stateless /health probe and an optional
+    browser upload page before the MCP app handles JSON-RPC."""
 
     def __init__(self, mcp_app) -> None:
         self.mcp_app = mcp_app
         self._health = JSONResponse({"status": "ok"})
+        self._upload_enabled = MCP_UPLOAD_ENABLED
 
     async def __call__(self, scope, receive, send):
-        if (
-            scope["type"] == "http"
-            and scope["method"] == "GET"
-            and scope["path"] == "/health"
-        ):
+        if scope["type"] != "http":
+            await self.mcp_app(scope, receive, send)
+            return
+        method = scope.get("method", "")
+        path = scope.get("path", "")
+        if method == "GET" and path == "/health":
             await self._health(scope, receive, send)
             return
+        if method == "GET" and path == "/":
+            await self._health(scope, receive, send)
+            return
+        if self._upload_enabled and path == "/upload":
+            agent_id = check_upload_token(scope)
+            if agent_id is None:
+                await upload_unauthorized()(scope, receive, send)
+                return
+            token = ""
+            if agent_id != "anonymous":
+                from tools.upload import _extract_token
+                token = _extract_token(scope)
+            if method == "GET":
+                await upload_get(scope, receive, send, token)
+                return
+            if method == "POST":
+                await upload_post(scope, receive, send, token)
+                return
         await self.mcp_app(scope, receive, send)
 
 
@@ -114,9 +160,17 @@ def main() -> None:
         mcp.settings.port = MCP_PORT
         mcp_app = mcp.streamable_http_app()
         app: object = _McpOrHealthApp(mcp_app)
-        if MCP_API_TOKEN:
-            log.info("streamable-http auth enabled")
-            app = BearerTokenMiddleware(app, expected_token=MCP_API_TOKEN)
+        if MCP_API_TOKENS_FILE or MCP_API_TOKEN:
+            log.info(
+                "streamable-http auth enabled (multi-token=%s)",
+                bool(MCP_API_TOKENS_FILE),
+            )
+            app = BearerTokenMiddleware(
+                app,
+                tokens_file=MCP_API_TOKENS_FILE,
+                legacy_token=MCP_API_TOKEN,
+                exempt_paths_all_methods={"/upload"} if MCP_UPLOAD_ENABLED else set(),
+            )
         else:
             log.info("streamable-http auth disabled")
         uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="info")

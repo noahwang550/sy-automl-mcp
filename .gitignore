@@ -29,5 +29,9 @@ AutogluonModels/
 .env
 .env.local
 
+# Production token table — real bearer tokens live here, never commit.
+# A template (deploy/tokens.example.json) is committed as documentation.
+deploy/tokens.json
+
 # Claude Code session state
 .claude/

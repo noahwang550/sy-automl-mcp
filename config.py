@@ -44,6 +44,12 @@ MCP_TASK_MAX_RETAINED = max(0, int(os.environ.get("MCP_TASK_MAX_RETAINED", "100"
 MCP_API_TOKEN_RAW = os.environ.get("MCP_API_TOKEN")
 MCP_API_TOKEN: str | None = MCP_API_TOKEN_RAW if MCP_API_TOKEN_RAW else None
 
+# --- Multi-agent auth (v0.5.0 deployment extension) ---
+# Multi-token JSON table; takes precedence over MCP_API_TOKEN when set.
+MCP_API_TOKENS_FILE = os.environ.get("MCP_API_TOKENS_FILE") or None
+# Audit log directory; when None, audit records go to stdout only.
+MCP_AUDIT_LOG_DIR = os.environ.get("MCP_AUDIT_LOG_DIR") or None
+
 # Rows above which predict/evaluate run as background tasks instead of inline.
 INLINE_ROW_THRESHOLD = int(os.environ.get("INLINE_ROW_THRESHOLD", "5000"))
 
@@ -51,6 +57,22 @@ INLINE_ROW_THRESHOLD = int(os.environ.get("INLINE_ROW_THRESHOLD", "5000"))
 MAX_DATASET_ROWS = int(os.environ.get("MAX_DATASET_ROWS", "1000000"))
 MAX_DATASET_MB = int(os.environ.get("MAX_DATASET_MB", "1024"))
 MAX_DATASET_COLUMNS = int(os.environ.get("MAX_DATASET_COLUMNS", "10000"))
+
+# Chunked-upload limits (escape hatch for attachments that can't be inlined
+# or fetched via http(s) — e.g. agent-platform session attachments that live
+# in a separate storage domain from this container).
+MAX_UPLOAD_CHUNK_BYTES = int(os.environ.get("MAX_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+MAX_UPLOAD_TOTAL_BYTES = int(os.environ.get("MAX_UPLOAD_TOTAL_BYTES", str(256 * 1024 * 1024)))
+
+# Browser upload page at /upload — escape hatch for agent platforms that
+# cannot pipe attachment bytes through the LLM. When true, GET /upload serves
+# an HTML form and POST /upload accepts multipart file upload.
+MCP_UPLOAD_ENABLED = os.environ.get("MCP_UPLOAD_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+# Externally-reachable base URL for the upload page (the server can't infer
+# its own public hostname). E.g. "http://10.0.0.5:9885". When MCP_UPLOAD_ENABLED
+# but this is unset, get_upload_instructions returns a placeholder telling
+# the operator to configure it.
+MCP_UPLOAD_URL_BASE = os.environ.get("MCP_UPLOAD_URL_BASE", "").rstrip("/").strip()
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
@@ -97,6 +119,11 @@ def model_path(model_id: str) -> Path:
 def dataset_path(dataset_id: str) -> Path:
     validate_id(dataset_id, "dataset_id")
     return DATASETS_DIR / dataset_id
+
+
+def dataset_chunks_path(dataset_id: str) -> Path:
+    """Per-dataset directory holding in-progress upload chunks + meta.json."""
+    return dataset_path(dataset_id) / ".chunks"
 
 
 def prediction_path(prediction_id: str) -> Path:
