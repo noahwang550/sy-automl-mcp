@@ -167,6 +167,8 @@ def _delete_model(model_id: str, confirm: bool) -> dict[str, Any]:
     entry = _registry_entry(model_id)
     if entry is None and not _model_dir_exists(model_id):
         raise FileNotFoundError(f"Model not found: {model_id}")
+    # Capture task_id before deletion so we can clean its log too.
+    task_id = (entry or {}).get("task_id")
     path = model_path(model_id)
     freed = 0.0
     if path.exists():
@@ -176,7 +178,23 @@ def _delete_model(model_id: str, confirm: bool) -> dict[str, Any]:
         shutil.rmtree(path)
     remove_model(model_id)
     _model_cache.pop(model_id)
-    return {"deleted": True, "model_id": model_id, "freed_mb": round(freed, 2)}
+    # v0.6.0: best-effort delete the training task log too.
+    log_deleted = False
+    if task_id:
+        try:
+            from config import log_path
+            lp = log_path(task_id)
+            if lp.exists():
+                lp.unlink()
+                log_deleted = True
+        except Exception:
+            pass
+    return {
+        "deleted": True,
+        "model_id": model_id,
+        "freed_mb": round(freed, 2),
+        "training_log_deleted": log_deleted,
+    }
 
 
 def delete_model(model_id: str, confirm: bool = False) -> dict[str, Any]:

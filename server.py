@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse
 from config import (
     MCP_API_TOKEN,
     MCP_API_TOKENS_FILE,
+    MCP_DOWNLOAD_ENABLED,
     MCP_HOST,
     MCP_PORT,
     MCP_TRANSPORT,
@@ -25,6 +26,7 @@ from config import (
     ensure_dirs,
 )
 from tools._common import safe_tool
+from tools.artifacts import download_handler, get_artifact_url, list_artifacts
 from tools.auth import BearerTokenMiddleware
 from tools.data import (
     finalize_dataset,
@@ -33,15 +35,9 @@ from tools.data import (
     upload_dataset_chunk,
     validate_dataset,
 )
-from tools.upload import (
-    check_upload_token,
-    get_upload_instructions,
-    handle_get as upload_get,
-    handle_post as upload_post,
-    unauthorized_response as upload_unauthorized,
-)
 from tools.model_management import delete_model, list_models, load_model, model_info
 from tools.multimodal import evaluate_multimodal, predict_multimodal, train_multimodal
+from tools.report import get_training_report
 from tools.tabular import (
     evaluate_tabular,
     feature_importance_tabular,
@@ -57,6 +53,13 @@ from tools.timeseries import (
     leaderboard_timeseries,
     predict_timeseries,
     train_timeseries,
+)
+from tools.upload import (
+    check_upload_token,
+    get_upload_instructions,
+    handle_get as upload_get,
+    handle_post as upload_post,
+    unauthorized_response as upload_unauthorized,
 )
 
 logging.basicConfig(
@@ -107,18 +110,24 @@ for _fn in (
     get_task_result,
     cancel_task,
     list_tasks,
+    # v0.6.0: training report + artifact download bridge
+    get_training_report,
+    list_artifacts,
+    get_artifact_url,
 ):
     mcp.tool()(safe_tool(_fn))
 
 
 class _McpOrHealthApp:
-    """ASGI wrapper that serves a stateless /health probe and an optional
-    browser upload page before the MCP app handles JSON-RPC."""
+    """ASGI wrapper that serves a stateless /health probe, an optional
+    browser upload page, and an optional /download artifact bridge before
+    the MCP app handles JSON-RPC."""
 
     def __init__(self, mcp_app) -> None:
         self.mcp_app = mcp_app
         self._health = JSONResponse({"status": "ok"})
         self._upload_enabled = MCP_UPLOAD_ENABLED
+        self._download_enabled = MCP_DOWNLOAD_ENABLED
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -147,6 +156,9 @@ class _McpOrHealthApp:
             if method == "POST":
                 await upload_post(scope, receive, send, token)
                 return
+        if self._download_enabled and path == "/download":
+            await download_handler(scope, receive, send)
+            return
         await self.mcp_app(scope, receive, send)
 
 
@@ -169,7 +181,9 @@ def main() -> None:
                 app,
                 tokens_file=MCP_API_TOKENS_FILE,
                 legacy_token=MCP_API_TOKEN,
-                exempt_paths_all_methods={"/upload"} if MCP_UPLOAD_ENABLED else set(),
+                exempt_paths_all_methods=(
+                    ({"/upload"} if MCP_UPLOAD_ENABLED else set()) | {"/download"}
+                ),
             )
         else:
             log.info("streamable-http auth disabled")

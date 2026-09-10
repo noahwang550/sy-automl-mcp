@@ -13,9 +13,9 @@ AutoGluon capabilities exposed:
 
 ## Tech Stack
 
-- **Language:** Python 3.11 (AutoGluon 1.5.0 verified).
+- **Language:** Python 3.11 (AutoGluon 1.6.1 verified).
 - **MCP server:** `mcp` Python SDK, FastMCP decorator style (`@mcp.tool()`). Transports: `stdio` (default) and `streamable-http`.
-- **AutoGluon:** `autogluon.tabular` 1.5.0, `autogluon.timeseries` 1.5.0, `autogluon.multimodal` 1.5.0.
+- **AutoGluon:** `autogluon.tabular` 1.6.1, `autogluon.timeseries` 1.6.1, `autogluon.multimodal` 1.6.1.
 - **Docker:** `python:3.11-slim` base, tiered build (tabular vs full). `pandas` 2.3.3.
 
 ## Critical Constraints
@@ -39,6 +39,11 @@ AutoGluon capabilities exposed:
   - `MCP_MAX_WORKERS` (default `1`) — background-task thread pool size. Safe to raise above 1 because stdout/stderr redirection is thread-local (see Stdout section).
   - `MAX_UPLOAD_CHUNK_BYTES` (default `1048576`) — max decoded size of a single `upload_dataset_chunk` payload.
   - `MAX_UPLOAD_TOTAL_BYTES` (default `268435456`) — max assembled size of a `finalize_dataset` output.
+  - `MCP_DOWNLOAD_ENABLED` (default `true`) — enables the `/download` artifact-byte bridge (presigned HMAC URLs, Range support). Fail-closed.
+  - `MAX_DOWNLOAD_BYTES` (default `1073741824`) — per-request byte cap on `/download` (1GB). Range segments also capped.
+  - `MCP_ARTIFACT_BASE_URL` (default: unset) — external base URL used by `get_artifact_url` to build presigned download links (e.g. `https://host:9885`). Required for the download bridge to work end-to-end.
+  - `MCP_DOWNLOAD_SIGNING_KEY` (default: unset) — HMAC-SHA256 signing key for presigned download URLs. Required (fail-closed: `/download` returns 503 and `get_artifact_url` returns failure envelope when unset).
+  - `MCP_DOWNLOAD_URL_TTL_SECONDS` (default `3600`) — TTL for presigned download URLs (clamped to [60, 86400]).
 
 ## Build & Run Commands
 
@@ -80,9 +85,11 @@ docker run --rm --entrypoint sh -v "$PWD/artifacts:/app/artifacts" sy-automl-mcp
 
 ## Architecture
 
-- `server.py` — FastMCP entrypoint, registers all 28 tools, selects transport from env. Registered tools are wrapped with `safe_tool` (defense-in-depth — converts unhandled exceptions to the unified envelope). When `MCP_TRANSPORT=http` AND `MCP_API_TOKEN` is set: builds the ASGI app via `mcp.streamable_http_app()`, adds `BearerTokenMiddleware`, serves via `uvicorn.run(app, host, port)`. A `_McpOrHealthApp` ASGI wrapper exempts `GET /` and `GET /health` from auth (returns `200 {"status":"ok"}` as an intentionally-unauthed liveness probe). Startup logs "streamable-http auth enabled/disabled" — NEVER the token value. stdio path and no-token http path are unchanged.
+- `server.py` — FastMCP entrypoint, registers all 31 tools, selects transport from env. Registered tools are wrapped with `safe_tool` (defense-in-depth — converts unhandled exceptions to the unified envelope). When `MCP_TRANSPORT=http` AND `MCP_API_TOKEN` is set: builds the ASGI app via `mcp.streamable_http_app()`, adds `BearerTokenMiddleware`, serves via `uvicorn.run(app, host, port)`. A `_McpOrHealthApp` ASGI wrapper exempts `GET /` and `GET /health` from auth (returns `200 {"status":"ok"}` as an intentionally-unauthed liveness probe). Startup logs "streamable-http auth enabled/disabled" — NEVER the token value. stdio path and no-token http path are unchanged.
 - `config.py` — Path constants, env var parsing, registry helpers, ID validation. All artifact paths resolve under a single root (`ARTIFACTS_DIR`); tool code must never accept raw absolute paths from callers — it resolves user-supplied identifiers against this root and rejects traversal attempts (`validate_id`).
-- `tools/` — One module per capability group: `tabular.py`, `timeseries.py`, `multimodal.py`, `model_management.py`, `data.py`, `task_status.py`, `_common.py`, `auth.py`.
+- `tools/` — One module per capability group: `tabular.py`, `timeseries.py`, `multimodal.py`, `model_management.py`, `data.py`, `task_status.py`, `_common.py`, `auth.py`, `upload.py`, `report.py`, `artifacts.py`.
+  - `report.py` (v0.6.0) assembles + persists `report.json` after each `_train_*_job` (data_summary, training_config, training_process, evaluation with leaderboard + fit_summary, lazy feature_importance with leakage warning at >0.9 importance, download_urls injected per-request). Three predictor types share a schema; type-specific fields under `data_summary` are `None` when not applicable. `get_training_report(model_id, include_feature_importance=false, leaderboard_top_n=0)` reads persisted report + lazily computes/caches feature_importance CSV via the model LRU cache.
+  - `artifacts.py` (v0.6.0) is the download bridge: `list_artifacts(model_id, subpath, skip, limit)` walks the artifacts tree with path validation; `get_artifact_url(path, ttl_seconds)` issues HMAC-SHA256 presigned URLs bound to (path, expiry, agent_id); `download_handler` is the ASGI app for `GET /download` (Range 206, Content-Type inference, audit logging, fail-closed signing key). Path safety via `resolve()` + `is_relative_to(ARTIFACTS_DIR)`; symlinks escaping the root are caught.
   - `auth.py` exports `check_bearer_token(auth_header, expected) -> bool` (constant-time `secrets.compare_digest` for ALL header paths — missing, wrong, and correct tokens all take the same comparison branch) and `BearerTokenMiddleware` (Starlette `BaseHTTPMiddleware`). Accepted headers: `Authorization: Bearer <token>` (case-insensitive scheme), `X-API-Key: <token>`, bare `<token>` in `Authorization`. Returns generic `401 {"detail":"Unauthorized"}` — no token echo, no missing-vs-wrong distinction. Exempts `GET /` and `GET /health` (strict: method GET + exact path).
   - `_common.py` installs a process-wide `_ThreadLocalOutputProxy` on `sys.stdout`/`sys.stderr` at import and provides `_suppress_output()` (sets the thread-local target to `os.devnull`) plus `set_thread_output_target()` / `reset_thread_output_target()` helpers. Special methods (`__iter__`, `__next__`, …) are implemented explicitly on the proxy class because Python looks them up on the type, not via `__getattr__`. Also exports `safe_tool`, a decorator applied to every public tool so that any unhandled exception is converted to a failure envelope (the MCP layer never sees a raw exception).
   - `model_management.py` holds a thread-safe `_ModelLRUCache` (OrderedDict, move-to-end, popitem(last=False)) capped by `MCP_MODEL_CACHE_MAX`. Exposes `get_or_load()` which serializes concurrent loads of the same uncached key via a per-cache lock + double-checked loading.
@@ -94,7 +101,7 @@ docker run --rm --entrypoint sh -v "$PWD/artifacts:/app/artifacts" sy-automl-mcp
   - `progress.py` exports `parse_progress(log_path, status)` — best-effort parses the AutoGluon task log into a structured dict (`announced_models`, `models_attempted`, `latest_score`, `latest_model`, `metric`, `recent_lines`); never raises. Reports *latest* score (not a claimed "best") because metric direction is metric-dependent.
 - `serialization/` — `envelope.py` (unified `{success, data, error}` response), `dataframe.py` (DataFrame → JSON-serializable dicts/lists).
 - `artifacts/` — Runtime directory for datasets, models, predictions (bind-mounted, gitignored).
-- `e2e_stdio.py` — Live stdio MCP round-trip harness at repo root. Spawns the server via the `mcp` SDK, asserts 28 tools are listed, and drives a full tabular flow end-to-end; asserts stdout stays clean.
+- `e2e_stdio.py` — Live stdio MCP round-trip harness at repo root. Spawns the server via the `mcp` SDK, asserts 31 tools are listed, and drives a full tabular flow end-to-end; asserts stdout stays clean.
 
 ## Streamable-HTTP Bearer Token Auth
 
@@ -114,7 +121,7 @@ AutoGluon/PyTorch/Lightning write progress bars + banners to stdout/stderr, whic
 
 1. `tools/_common.py`: installs `_ThreadLocalOutputProxy` on `sys.stdout` / `sys.stderr` once at import. `_suppress_output()` sets the current thread's target to `os.devnull` around every inline `envelope_call`.
 2. `tasks/manager.py`: background worker calls `set_thread_output_target(task_log_fh)` while `func(task)` runs, then `reset_thread_output_target()` — only the worker thread's writes are redirected; other threads are unaffected.
-3. `verbosity=0` on supported AutoGluon constructors/methods. **Note:** AutoGluon 1.5.0 — `evaluate()`, `feature_importance()`, `predict()`, `leaderboard()` do NOT accept `verbosity` (no `**kwargs`); pass it only on constructors, `fit()`, `fit_summary()`.
+3. `verbosity=0` on supported AutoGluon constructors/methods. **Note:** AutoGluon 1.6.1 — `evaluate()`, `feature_importance()`, `predict()`, `leaderboard()` do NOT accept `verbosity` (no `**kwargs`); pass it only on constructors, `fit()`, `fit_summary()`.
 
 Output redirection is thread-safe at `max_workers > 1` (thread-local targets, global proxy is read-only after install). Safe to raise `MCP_MAX_WORKERS` for parallel training.
 

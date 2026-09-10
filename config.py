@@ -74,6 +74,17 @@ MCP_UPLOAD_ENABLED = os.environ.get("MCP_UPLOAD_ENABLED", "false").lower() in {"
 # the operator to configure it.
 MCP_UPLOAD_URL_BASE = os.environ.get("MCP_UPLOAD_URL_BASE", "").rstrip("/").strip()
 
+# --- Artifact download bridge (v0.6.0) ---
+# /download endpoint serves artifact bytes (leaderboard.csv, report.json, model
+# archive, ...) via presigned HMAC-SHA256 URLs. Signing key is REQUIRED —
+# fail-closed if unset (download_handler returns 503, get_artifact_url returns
+# a failure envelope prompting operator to configure it).
+MCP_DOWNLOAD_ENABLED = os.environ.get("MCP_DOWNLOAD_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+MAX_DOWNLOAD_BYTES = int(os.environ.get("MAX_DOWNLOAD_BYTES", str(1024 * 1024 * 1024)))  # 1GB default
+MCP_ARTIFACT_BASE_URL = os.environ.get("MCP_ARTIFACT_BASE_URL", "").rstrip("/").strip()
+MCP_DOWNLOAD_SIGNING_KEY = os.environ.get("MCP_DOWNLOAD_SIGNING_KEY") or None
+MCP_DOWNLOAD_URL_TTL_SECONDS = max(60, int(os.environ.get("MCP_DOWNLOAD_URL_TTL_SECONDS", "3600")))
+
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 

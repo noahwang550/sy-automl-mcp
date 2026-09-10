@@ -6,6 +6,7 @@ AutoGluon is not installed.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,7 @@ def _resolve_image_path(img: str) -> Path:
     return resolved
 
 def _train_multimodal_job(task: Task) -> dict[str, Any]:
+    started = time.time()
     p = task.params
     df = read_dataset_df(p["dataset_id"])
     label = p["label"]
@@ -116,9 +118,53 @@ def _train_multimodal_job(task: Task) -> dict[str, Any]:
             "created_at": task.created_at,
             "task_id": task.task_id,
             "size_mb": round(size_mb, 2),
+            "dataset_id": p["dataset_id"],
         }
     )
-    return {"model_id": p["model_id"], "artifact_path": task.artifact_path}
+    duration = time.time() - started
+
+    # v0.6.0: persist report.json (no leaderboard/fit_summary for multimodal —
+    # MultiModalPredictor doesn't expose them in the same shape).
+    from tools import report as report_mod
+    mp = model_path(p["model_id"])
+    mp.mkdir(parents=True, exist_ok=True)
+    data_summary = {
+        "dataset_id": p["dataset_id"],
+        "rows_raw": len(df),
+        "rows_dropped_empty_target": 0,
+        "rows_trained": len(df),
+        "columns_total": len(df.columns),
+        "target": label,
+        "target_classes": None,
+        "target_distribution": None,
+        "problem_type": None,
+        "excluded_columns": [],
+        "prediction_length": None,
+        "freq": None,
+        "image_column": p.get("image_path_column"),
+        "text_column": p.get("text_column"),
+        "task_type": p.get("problem_type") or "multimodal",
+    }
+    report = report_mod.assemble_report(
+        predictor_type="multimodal",
+        task=task,
+        params=p,
+        data_summary=data_summary,
+        training_config_extra={},
+        predictor=predictor,
+        leaderboard=None,
+        fit_summary=None,
+        duration_seconds=duration,
+    )
+    report_path = report_mod.persist_report(p["model_id"], report)
+    return {
+        "model_id": p["model_id"],
+        "artifact_path": task.artifact_path,
+        "report_path": report_path,
+        "duration_seconds": round(duration, 3),
+        "time_limit_hit": (report.get("training_process") or {}).get("time_limit_hit"),
+        "early_stopped": (report.get("training_process") or {}).get("early_stopped"),
+    }
 
 
 def train_multimodal(

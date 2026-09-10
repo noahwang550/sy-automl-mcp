@@ -32,6 +32,9 @@ AutogluonModels/
 # Production token table — real bearer tokens live here, never commit.
 # A template (deploy/tokens.example.json) is committed as documentation.
 deploy/tokens.json
+# Production env — contains MCP_DOWNLOAD_SIGNING_KEY (real HMAC key).
+# Template (deploy/env.example) is committed as documentation.
+deploy/env
 
 # Claude Code session state
 .claude/

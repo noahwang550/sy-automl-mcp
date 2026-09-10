@@ -6,6 +6,7 @@ AutoGluon is not installed.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from typing import Any
 
@@ -63,6 +64,7 @@ def _load_predictor(model_id: str):
 
 
 def _train_timeseries_job(task: Task) -> dict[str, Any]:
+    started = time.time()
     p = task.params
     df = read_dataset_df(p["dataset_id"])
     ts_df = _to_tsdf(df, p.get("id_column"), p.get("time_column"))
@@ -99,10 +101,60 @@ def _train_timeseries_job(task: Task) -> dict[str, Any]:
         }
     )
     lb = predictor.leaderboard(silent=True)
+    duration = time.time() - started
+
+    # v0.6.0: persist leaderboard.csv + fit_summary.json + report.json
+    from tools import report as report_mod
+    mp = model_path(p["model_id"])
+    mp.mkdir(parents=True, exist_ok=True)
+    if lb is not None:
+        lb.to_csv(mp / "leaderboard.csv", index=False)
+    fs = None
+    try:
+        fs = predictor.fit_summary(verbosity=0)
+        report_mod._json_atomic_write(mp / "fit_summary.json", to_jsonable(fs))
+    except Exception:
+        pass
+    data_summary = {
+        "dataset_id": p["dataset_id"],
+        "rows_raw": len(df),
+        "rows_dropped_empty_target": 0,
+        "rows_trained": len(df),
+        "columns_total": len(df.columns),
+        "target": p["target"],
+        "target_classes": None,
+        "target_distribution": None,
+        "problem_type": "timeseries",
+        "excluded_columns": [],
+        "prediction_length": p.get("prediction_length"),
+        "freq": p.get("freq"),
+        "image_column": None,
+        "text_column": None,
+        "task_type": None,
+    }
+    report = report_mod.assemble_report(
+        predictor_type="timeseries",
+        task=task,
+        params=p,
+        data_summary=data_summary,
+        training_config_extra={},
+        predictor=predictor,
+        leaderboard=lb,
+        fit_summary=fs,
+        duration_seconds=duration,
+    )
+    report_path = report_mod.persist_report(p["model_id"], report)
     return {
         "model_id": p["model_id"],
         "artifact_path": task.artifact_path,
         "leaderboard_top": to_jsonable(lb.head(5)) if lb is not None else [],
+        "report_path": report_path,
+        "duration_seconds": round(duration, 3),
+        "metric_name": (report.get("evaluation") or {}).get("metric_name"),
+        "metric_value": (report.get("evaluation") or {}).get("metric_value"),
+        "metric_direction": (report.get("evaluation") or {}).get("metric_direction"),
+        "time_limit_hit": (report.get("training_process") or {}).get("time_limit_hit"),
+        "early_stopped": (report.get("training_process") or {}).get("early_stopped"),
     }
 
 

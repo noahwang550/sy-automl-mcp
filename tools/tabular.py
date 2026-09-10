@@ -6,6 +6,7 @@ AutoGluon is imported lazily inside each function so the module imports cheaply
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from io import StringIO
 from typing import Any
@@ -53,6 +54,7 @@ def _resolve_problem_type(problem_type: str | None) -> str | None:
 
 
 def _train_tabular_job(task: Task) -> dict[str, Any]:
+    started = time.time()
     p = task.params
     df = read_dataset_df(p["dataset_id"])
     target = p["target"]
@@ -104,10 +106,56 @@ def _train_tabular_job(task: Task) -> dict[str, Any]:
             "created_at": task.created_at,
             "task_id": task.task_id,
             "size_mb": round(size_mb, 2),
+            "dataset_id": p["dataset_id"],
         }
     )
     lb = predictor.leaderboard(silent=True)
     best = str(predictor.model_best) if predictor.model_best else None
+    duration = time.time() - started
+
+    # v0.6.0: persist leaderboard.csv + fit_summary.json + report.json
+    from tools import report as report_mod
+    mp = model_path(p["model_id"])
+    mp.mkdir(parents=True, exist_ok=True)
+    if lb is not None:
+        lb.to_csv(mp / "leaderboard.csv", index=False)
+    fs = None
+    try:
+        fs = predictor.fit_summary(verbosity=0)
+        report_mod._json_atomic_write(mp / "fit_summary.json", to_jsonable(fs))
+    except Exception:
+        pass
+    is_clf = (predictor.problem_type in ("binary", "multiclass"))
+    vc = df[target].value_counts() if is_clf else None
+    data_summary = {
+        "dataset_id": p["dataset_id"],
+        "rows_raw": rows_before,
+        "rows_dropped_empty_target": rows_dropped_empty_target,
+        "rows_trained": len(df),
+        "columns_total": len(df.columns),
+        "target": target,
+        "target_classes": sorted(map(str, vc.index))[:50] if vc is not None else None,
+        "target_distribution": {str(k): int(v) for k, v in vc.head(50).items()} if vc is not None else None,
+        "problem_type": predictor.problem_type,
+        "excluded_columns": [],
+        "prediction_length": None,
+        "freq": None,
+        "image_column": None,
+        "text_column": None,
+        "task_type": None,
+    }
+    report = report_mod.assemble_report(
+        predictor_type="tabular",
+        task=task,
+        params=p,
+        data_summary=data_summary,
+        training_config_extra={},
+        predictor=predictor,
+        leaderboard=lb,
+        fit_summary=fs,
+        duration_seconds=duration,
+    )
+    report_path = report_mod.persist_report(p["model_id"], report)
     return {
         "model_id": p["model_id"],
         "best_model": best,
@@ -115,6 +163,13 @@ def _train_tabular_job(task: Task) -> dict[str, Any]:
         "leaderboard_top": to_jsonable(lb.head(5)) if lb is not None else [],
         "rows_trained": len(df),
         "rows_dropped_empty_target": rows_dropped_empty_target,
+        "report_path": report_path,
+        "duration_seconds": round(duration, 3),
+        "metric_name": (report.get("evaluation") or {}).get("metric_name"),
+        "metric_value": (report.get("evaluation") or {}).get("metric_value"),
+        "metric_direction": (report.get("evaluation") or {}).get("metric_direction"),
+        "time_limit_hit": (report.get("training_process") or {}).get("time_limit_hit"),
+        "early_stopped": (report.get("training_process") or {}).get("early_stopped"),
     }
 
 
