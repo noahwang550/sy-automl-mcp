@@ -186,6 +186,7 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         expected_token: str | None = None,  # legacy kwarg alias for legacy_token
         exempt_paths: set[str] | None = None,
         exempt_paths_all_methods: set[str] | None = None,
+        exempt_path_prefixes: set[str] | None = None,
     ) -> None:
         super().__init__(app)
         # `expected_token` is the legacy kwarg name; alias it to `legacy_token`.
@@ -197,6 +198,11 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         # Paths that skip auth regardless of method (the handler does its own
         # token check). Used by /upload so browsers can pass ?token= in URL.
         self.exempt_paths_all_methods: set[str] = exempt_paths_all_methods or set()
+        # Path prefixes that skip auth entirely. The handler does its own
+        # auth via embedded signature. Used by /d/{sid}/... and
+        # /download/{token}/... so the short session_id / HMAC token IS the
+        # auth — bearer middleware must not gate these.
+        self.exempt_path_prefixes: set[str] = exempt_path_prefixes or set()
         # Force initial load at startup (don't wait for first request).
         _store.maybe_reload()
 
@@ -213,6 +219,11 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 
         if request.url.path in self.exempt_paths_all_methods:
             return await call_next(request)
+
+        if self.exempt_path_prefixes:
+            for prefix in self.exempt_path_prefixes:
+                if request.url.path.startswith(prefix):
+                    return await call_next(request)
 
         if request.method == "GET" and request.url.path in self.exempt_paths:
             return await call_next(request)

@@ -5,7 +5,6 @@ AutoGluon is imported lazily inside each function so the module imports cheaply
 """
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from io import StringIO
@@ -218,13 +217,10 @@ def _predict_tabular_job(task: Task) -> dict[str, Any]:
     preds = predictor.predict(df)
     out = prediction_path(p["prediction_id"])
     result = {"model_id": p["model_id"], "prediction_id": p["prediction_id"]}
-    # Persist predictions as JSON records.
+    # Persist predictions as CSV so the downloaded file is directly readable.
     payload = pd.DataFrame({"prediction": preds})
     payload["__row_index__"] = range(len(payload))
-    out.write_text(
-        json.dumps({"model_id": p["model_id"], "predictions": to_jsonable(payload)}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    payload.to_csv(out, index=False)
     task.artifact_path = str(out)
     result["predictions"] = to_jsonable(preds)
     result["path"] = str(out)

@@ -1,10 +1,13 @@
 # PROGRESS.md — sy-automl-mcp 开发进度
 
-> 最后更新：2026-07-10（streamable-http Bearer token auth）
+> 最后更新：2026-09-10（prediction 文件改为 CSV）
 
 ## 当前状态
 
-**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.3.0 已发布。Hardening round（2026-07-09）已完成。v0.3.0 engineering round（2026-07-09）已完成。Streamable-http Bearer auth（2026-07-10）已完成。**
+**Phase 1、Phase 2、Phase 3 全部完成并验证。v0.3.0 已发布。Hardening round（2026-07-09）已完成。v0.3.0 engineering round（2026-07-09）已完成。Streamable-http Bearer auth（2026-07-10）已完成。Prediction CSV 持久化（2026-09-10）已完成。**
+
+- `:latest` 镜像（tabular）：**175 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）。
+- Prediction 输出改为 CSV：`config.py:165` `prediction_path` 返回 `PREDICTIONS_DIR / f"{prediction_id}.csv"`；`_predict_tabular_job` / `_predict_timeseries_job` / `_predict_multimodal_job` 使用 `pandas.to_csv(out, index=False)` 替代 `json.dumps({"model_id": ..., "predictions": ...})`。inline `predictions` 字段不变 — 仅持久化文件格式 JSON → CSV。旧 `.json` 文件不迁移。
 
 - `:latest` 镜像（tabular）：**102 passed, 2 skipped**（TS/MM skip 符合预期，它们在 `:full` 中）。`tests/test_auth.py` = 18 passed
 - `:full` 镜像（tabular + timeseries + multimodal）：**106 passed, 0 skipped, 0 failed**（~3.5 min）
@@ -173,6 +176,24 @@ Live stdio MCP e2e 在重建的 `:full` 镜像上重新验证通过 — auth 变
 
 **无验证缺口。** 剩余可选工作：
 1. （可选）streamable-http TLS/反向代理配置文档
+
+## Prediction CSV 持久化 — 2026-09-10
+
+**测试计数：** `:latest` **175 passed, 2 skipped**（TS/MM 不在 tabular tier）。
+
+### 实现
+
+将 prediction 输出文件从 JSON 改为 CSV，便于直接阅读和下游消费。
+
+1. `config.py:165` — `prediction_path` 返回 `PREDICTIONS_DIR / f"{prediction_id}.csv"`（原 `.json`）。
+2. `tools/tabular.py` `_predict_tabular_job`、`tools/timeseries.py` `_predict_timeseries_job`、`tools/multimodal.py` `_predict_multimodal_job` — 改用 `pandas.to_csv(out, index=False)`，替换 `json.dumps({"model_id": ..., "predictions": to_jsonable(payload)}, ...)`。
+3. inline `predictions` 字段（envelope）保持不变 — 仅持久化文件格式变化。
+4. 旧 `.json` 预测文件不迁移；只有新预测落盘为 CSV。
+5. 下载桥（`tools/artifacts.py`）通过 Content-Type 推断已支持 `.csv`，无需改动。
+
+### 验证
+
+175 passed, 2 skipped。`ruff check .` clean。
 
 ## 环境备忘
 

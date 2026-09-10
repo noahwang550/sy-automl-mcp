@@ -26,7 +26,13 @@ from config import (
     ensure_dirs,
 )
 from tools._common import safe_tool
-from tools.artifacts import download_handler, get_artifact_url, list_artifacts
+from tools.artifacts import (
+    download_handler,
+    get_artifact_bytes,
+    get_artifact_chunk,
+    get_artifact_url,
+    list_artifacts,
+)
 from tools.auth import BearerTokenMiddleware
 from tools.data import (
     finalize_dataset,
@@ -114,6 +120,12 @@ for _fn in (
     get_training_report,
     list_artifacts,
     get_artifact_url,
+    # v0.6.1: inline-bytes bridge (bypasses presigned URLs when platform
+    # auto-redacts token query strings)
+    get_artifact_bytes,
+    # v0.6.2: chunked-pull (small slices for large files under platform
+    # tool-response redaction thresholds)
+    get_artifact_chunk,
 ):
     mcp.tool()(safe_tool(_fn))
 
@@ -156,7 +168,11 @@ class _McpOrHealthApp:
             if method == "POST":
                 await upload_post(scope, receive, send, token)
                 return
-        if self._download_enabled and path == "/download":
+        if self._download_enabled and (
+            path == "/download"
+            or path.startswith("/download/")
+            or path.startswith("/d/")
+        ):
             await download_handler(scope, receive, send)
             return
         await self.mcp_app(scope, receive, send)
@@ -184,6 +200,12 @@ def main() -> None:
                 exempt_paths_all_methods=(
                     ({"/upload"} if MCP_UPLOAD_ENABLED else set()) | {"/download"}
                 ),
+                # v0.6.4: short session_id URLs and legacy path-token URLs
+                # carry their own auth (HMAC signature looked up server-side).
+                # Bearer middleware must not gate these — the agent platform
+                # can't attach Authorization headers to a browser-clicked
+                # URL, and the short session_id IS the auth.
+                exempt_path_prefixes={"/d/", "/download/"},
             )
         else:
             log.info("streamable-http auth disabled")

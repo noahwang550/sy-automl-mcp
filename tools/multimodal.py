@@ -5,7 +5,6 @@ AutoGluon is not installed.
 """
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from pathlib import Path
@@ -212,12 +211,12 @@ def _predict_multimodal_job(task: Task) -> dict[str, Any]:
     df = read_inline_or_dataset(p.get("dataset_id"), p.get("inline_csv"))
     preds = predictor.predict(df)
     out = prediction_path(p["prediction_id"])
-    out.write_text(
-        json.dumps(
-            {"model_id": p["model_id"], "predictions": to_jsonable(preds)}, ensure_ascii=False
-        ),
-        encoding="utf-8",
-    )
+    # Persist predictions as CSV so the downloaded file is directly readable.
+    if isinstance(preds, pd.DataFrame):
+        preds.to_csv(out, index=False)
+    else:
+        pd.DataFrame({"prediction": preds}).to_csv(out, index=False)
+    task.artifact_path = str(out)
     return {
         "model_id": p["model_id"],
         "prediction_id": p["prediction_id"],
