@@ -65,6 +65,8 @@ from tools.upload import (
     get_upload_instructions,
     handle_get as upload_get,
     handle_post as upload_post,
+    handle_session_get as upload_session_get,
+    handle_session_post as upload_session_post,
     unauthorized_response as upload_unauthorized,
 )
 
@@ -168,6 +170,18 @@ class _McpOrHealthApp:
             if method == "POST":
                 await upload_post(scope, receive, send, token)
                 return
+        # v0.6.5: session-based short URL /u/{sid} for browser uploads.
+        # Sidesteps agent-platform redactors that strip ?token= query
+        # params; the session_id is the auth (bearer proven at the
+        # get_upload_instructions MCP tool-call time).
+        if self._upload_enabled and path.startswith("/u/"):
+            sid = path[3:].split("/", 1)[0]
+            if method == "GET":
+                await upload_session_get(scope, receive, send, sid)
+                return
+            if method == "POST":
+                await upload_session_post(scope, receive, send, sid)
+                return
         if self._download_enabled and (
             path == "/download"
             or path.startswith("/download/")
@@ -200,12 +214,13 @@ def main() -> None:
                 exempt_paths_all_methods=(
                     ({"/upload"} if MCP_UPLOAD_ENABLED else set()) | {"/download"}
                 ),
-                # v0.6.4: short session_id URLs and legacy path-token URLs
-                # carry their own auth (HMAC signature looked up server-side).
-                # Bearer middleware must not gate these — the agent platform
-                # can't attach Authorization headers to a browser-clicked
-                # URL, and the short session_id IS the auth.
-                exempt_path_prefixes={"/d/", "/download/"},
+                # v0.6.4/v0.6.5: short session_id URLs and legacy path-token URLs
+                # carry their own auth (HMAC signature looked up server-side for
+                # download; session_id IS the auth for upload, bearer proven at
+                # MCP tool-call time). Bearer middleware must not gate these —
+                # the agent platform can't attach Authorization headers to a
+                # browser-clicked URL, and the short session_id IS the auth.
+                exempt_path_prefixes={"/d/", "/download/", "/u/"},
             )
         else:
             log.info("streamable-http auth disabled")
